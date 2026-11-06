@@ -4,7 +4,7 @@
 Start with a question or an unclear problem. Discuss it until you agree on what needs
 to change. Then discuss the design before implementation, two independent reviews, and tests.
 It uses the Codex app server and its existing sandbox controls.
-All work stays local. The command produces a patch and a PR draft for you to review.
+Code changes stay local. The command produces a patch and a PR draft for you to review.
 
 ## Run it
 
@@ -48,6 +48,16 @@ test evidence remain in that worktree and its saved artifacts.
 The controller finds `kernel-review` in Codex's plugin cache. Use
 `--kernel-review /path/to/kernel-review/SKILL.md` to select it explicitly.
 The command uses your configured model. `--model` selects a different one.
+
+Chat inherits your MCP servers, apps, plugins, and authentication settings. It adds
+the Unity Catalog controller to that setup. Review and test workers use separate
+sessions with external tools disabled.
+
+To use an existing Codex launcher, set `CODEX_UC_CHAT_COMMAND` to its command and
+arguments. For example: `CODEX_UC_CHAT_COMMAND="my-codex-launcher --" codex-uc`.
+The launcher runs from the selected repository and receives the normal Codex flags.
+The command runs without a shell. `--codex-bin` selects an explicit executable instead.
+`codex-uc resume` uses the same launcher setting.
 
 For scripts, the explicit `start` command retains the original one-step interface.
 It prints a design and exits. The saved-run commands also remain available:

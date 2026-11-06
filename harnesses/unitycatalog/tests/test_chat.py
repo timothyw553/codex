@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -44,8 +46,9 @@ def chat_design(store, design):
 
 
 @pytest.mark.parametrize("location", ["explicit", "current", "home"])
+@pytest.mark.parametrize("wrapped", [False, True])
 def test_launcher_opens_native_chat_without_a_task_or_worktree(
-    store, tmp_path, monkeypatch, capsys, location
+    store, tmp_path, monkeypatch, capsys, location, wrapped
 ):
     repo = Path(store.state.repo)
     test_home = tmp_path / "home"
@@ -62,10 +65,24 @@ def test_launcher_opens_native_chat_without_a_task_or_worktree(
         "    print(json.dumps([{'name': 'other_tools'}]))\n"
         "    raise SystemExit(0)\n"
         "with open(os.environ['CHAT_ARGUMENTS'], 'w') as output:\n"
-        "    json.dump(sys.argv[1:], output)\n"
+        "    json.dump({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'config': os.environ.get('CODEX_HOME'), 'wrapped': os.environ.get('WRAPPED_CHAT')}, output)\n"
     )
     executable.chmod(0o755)
+    launcher = tmp_path / "chat launcher"
+    launcher.write_text(
+        "#!" + sys.executable + "\nimport os, sys\n"
+        "assert sys.argv[1] == '--native'\n"
+        "os.environ['WRAPPED_CHAT'] = '1'\n"
+        "os.execv(sys.argv[2], sys.argv[2:])\n"
+    )
+    launcher.chmod(0o755)
+    monkeypatch.setenv(
+        "CODEX_UC_CHAT_COMMAND", shlex.join([str(launcher), "--native", str(executable)])
+    )
     monkeypatch.setenv("CHAT_ARGUMENTS", str(record))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "native-home"))
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.delenv("WRAPPED_CHAT", raising=False)
     before = git(Path(store.state.repo), "worktree", "list", "--porcelain")
     args = SimpleNamespace(
         repo=repo / "tests" if location == "explicit" else None,
@@ -73,17 +90,23 @@ def test_launcher_opens_native_chat_without_a_task_or_worktree(
         base=None,
         kernel_review=None,
         model=None,
-        codex_bin=str(executable),
+        codex_bin=None if wrapped else str(executable),
         state_dir=tmp_path / "sessions",
     )
 
     assert chat.launch_chat(args) == 0
 
-    argv = json.loads(record.read_text())
+    launched = json.loads(record.read_text())
+    argv = launched["argv"]
+    assert launched["cwd"] == store.state.repo
+    assert launched["config"] == os.environ["CODEX_HOME"]
+    assert launched["wrapped"] == ("1" if wrapped else None)
     assert argv[argv.index("--sandbox") + 1] == "read-only"
     assert argv[argv.index("--cd") + 1] == store.state.repo
     assert any("codex_uc.chat_server" in value for value in argv)
-    assert 'mcp_servers={"other_tools"={enabled=false}}' in argv
+    assert not any(value.startswith("mcp_servers=") for value in argv)
+    assert "features.apps=false" not in argv
+    assert "features.plugins=false" not in argv
     assert "--ask-for-approval" not in argv
     assert (
         "approval_policy={granular={sandbox_approval=false,rules=false,skill_approval=false,request_permissions=false,mcp_elicitations=true}}"
@@ -101,7 +124,9 @@ def test_launcher_opens_native_chat_without_a_task_or_worktree(
     assert (
         chat.resume_chat(SimpleNamespace(run=None, repo=args.repo, state_dir=args.state_dir)) == 0
     )
-    resumed = json.loads(record.read_text())
+    resumed_record = json.loads(record.read_text())
+    assert resumed_record["wrapped"] == launched["wrapped"]
+    resumed = resumed_record["argv"]
     assert resumed[resumed.index("resume") + 1] == "--last"
     assert next(value for value in resumed if value.startswith("sqlite_home=")) == next(
         value for value in argv if value.startswith("sqlite_home=")

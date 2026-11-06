@@ -1,14 +1,15 @@
 """Open the native Codex chat with the Unity Catalog controller attached."""
 
 import json
+import os
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .runtime import local_tool_config
 from .storage import load, resolve_repository, save
 from .writing import STYLE
 
@@ -50,9 +51,15 @@ the patch is ready. Report the checks that actually ran and any limits on the ev
 
 def native_chat(root: Path, prompt: str | None = None, *, resume: bool = False) -> int:
     state = load(root / "chat.json")
-    executable = shutil.which(state["codex_bin"] or "codex")
-    if not executable:
-        raise ValueError("Install Codex and sign in before starting this chat.")
+    command = (
+        [state["codex_bin"]]
+        if state["codex_bin"]
+        else shlex.split(os.environ.get("CODEX_UC_CHAT_COMMAND", "codex"))
+    )
+    if not command or not shutil.which(command[0]):
+        raise ValueError(
+            "The Codex launcher was not found. Install Codex or set CODEX_UC_CHAT_COMMAND."
+        )
     server = (
         "mcp_servers.unitycatalog={command="
         + json.dumps(sys.executable)
@@ -60,16 +67,16 @@ def native_chat(root: Path, prompt: str | None = None, *, resume: bool = False) 
         + json.dumps(["-m", "codex_uc.chat_server", str(root)])
         + ',enabled=true,required=true,tool_timeout_sec=86400,default_tools_approval_mode="approve"}'
     )
-    command = [
-        executable,
-        "--no-daemon",
-        "--cd",
-        state["repo"],
-        "--sandbox",
-        "read-only",
-    ]
+    command.extend(
+        [
+            "--no-daemon",
+            "--cd",
+            state["repo"],
+            "--sandbox",
+            "read-only",
+        ]
+    )
     for setting in (
-        *local_tool_config(executable, Path(state["repo"])),
         server,
         "approval_policy={granular={sandbox_approval=false,rules=false,skill_approval=false,request_permissions=false,mcp_elicitations=true}}",
         'approvals_reviewer="user"',
@@ -89,7 +96,7 @@ def native_chat(root: Path, prompt: str | None = None, *, resume: bool = False) 
         command.append(prompt)
     print(f"Repository: {state['repo']}", flush=True)
     print(f"Chat: {root}", flush=True)
-    return subprocess.run(command, check=False).returncode
+    return subprocess.run(command, cwd=state["repo"], check=False).returncode
 
 
 def launch_chat(args) -> int:

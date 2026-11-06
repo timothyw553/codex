@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -120,6 +121,23 @@ def test_a_changed_request_cannot_reuse_an_old_result(store, server):
     runtime.ask(store.root, "Inspect the revised design.", Presentation, label="design")
     assert len(server.starts) == 2
     assert server.resumes == []
+
+
+def test_workers_disable_inherited_remote_tools(store, tmp_path):
+    executable = tmp_path / "codex"
+    executable.write_text(
+        "#!" + sys.executable + "\nimport json, sys\n"
+        "assert sys.argv[1:] == ['mcp', 'list', '--json']\n"
+        "print(json.dumps([{'name': 'other_tools'}]))\n"
+    )
+    executable.chmod(0o755)
+    store.update(codex_bin=str(executable))
+
+    config = Runtime(store).config(Path(store.state.worktree))
+
+    assert 'mcp_servers={"other_tools"={enabled=false}}' in config.config_overrides
+    assert "features.apps=false" in config.config_overrides
+    assert "features.plugins=false" in config.config_overrides
 
 
 @pytest.mark.skipif(
