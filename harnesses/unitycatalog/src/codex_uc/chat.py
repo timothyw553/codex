@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .runtime import local_tool_config
-from .storage import git, load, save
+from .storage import load, resolve_repository, save
 from .writing import STYLE
 
 INSTRUCTIONS = (
@@ -87,12 +87,13 @@ def native_chat(root: Path, prompt: str | None = None, *, resume: bool = False) 
     command.extend(["--config", "sqlite_home=" + json.dumps(str(root / "history"))])
     if prompt:
         command.append(prompt)
+    print(f"Repository: {state['repo']}", flush=True)
     print(f"Chat: {root}", flush=True)
     return subprocess.run(command, check=False).returncode
 
 
 def launch_chat(args) -> int:
-    repo = Path(git(args.repo.resolve(), "rev-parse", "--show-toplevel")).resolve()
+    repo = resolve_repository(args.repo)
     state_dir = args.state_dir.expanduser().resolve()
     if state_dir.is_relative_to(repo):
         raise ValueError("Store chat state outside the source repository.")
@@ -119,7 +120,7 @@ def resume_chat(args) -> int:
     if args.run:
         root = args.run.expanduser().resolve()
     else:
-        repo = git(args.repo.resolve(), "rev-parse", "--show-toplevel")
+        repo = str(resolve_repository(args.repo))
         roots = sorted(args.state_dir.expanduser().glob("chats/*/chat.json"), reverse=True)
         root = next((path.parent for path in roots if load(path)["repo"] == repo), None)
         if root is None:

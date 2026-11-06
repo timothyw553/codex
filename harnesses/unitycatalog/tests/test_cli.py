@@ -9,13 +9,18 @@ from codex_uc.contracts import WorkResult
 from codex_uc.storage import Store, git
 
 
-@pytest.mark.parametrize("explicit_repo", [False, True])
+@pytest.mark.parametrize("location", ["explicit", "current", "home"])
 @pytest.mark.parametrize("task_in_argv", [False, True])
 def test_start_uses_the_current_repository_or_an_explicit_path(
-    store, runtime, tmp_path, monkeypatch, capsys, explicit_repo, task_in_argv
+    store, runtime, tmp_path, monkeypatch, capsys, location, task_in_argv
 ):
     repo = Path(store.state.repo)
-    monkeypatch.chdir(tmp_path if explicit_repo else repo / "tests")
+    test_home = tmp_path / "home"
+    test_home.mkdir()
+    default_repo = repo if location == "home" else Path(store.state.worktree)
+    (test_home / "unitycatalog").symlink_to(default_repo, target_is_directory=True)
+    monkeypatch.setattr(Path, "home", lambda: test_home)
+    monkeypatch.chdir(repo / "tests" if location == "current" else test_home)
     argv = [
         "--base",
         store.state.base,
@@ -28,7 +33,7 @@ def test_start_uses_the_current_repository_or_an_explicit_path(
         argv.insert(0, store.state.task)
     else:
         monkeypatch.setattr(sys, "stdin", io.StringIO(store.state.task + "\n"))
-    if explicit_repo:
+    if location == "explicit":
         argv = ["--repo", str(repo), *argv]
     argv = ["start", *argv]
     monkeypatch.setattr(sys, "argv", ["codex-uc", *argv])
@@ -59,6 +64,7 @@ def test_default_command_opens_chat_without_starting_design(monkeypatch, argv):
 
     assert len(launched) == 1
     assert launched[0].command == "chat"
+    assert launched[0].repo is None
     assert launched[0].task == (argv[0] if argv and argv[0] != "chat" else None)
 
 

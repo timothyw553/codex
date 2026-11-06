@@ -43,7 +43,17 @@ def chat_design(store, design):
     return design
 
 
-def test_launcher_opens_native_chat_without_a_task_or_worktree(store, tmp_path, monkeypatch):
+@pytest.mark.parametrize("location", ["explicit", "current", "home"])
+def test_launcher_opens_native_chat_without_a_task_or_worktree(
+    store, tmp_path, monkeypatch, capsys, location
+):
+    repo = Path(store.state.repo)
+    test_home = tmp_path / "home"
+    test_home.mkdir()
+    default_repo = repo if location == "home" else Path(store.state.worktree)
+    (test_home / "unitycatalog").symlink_to(default_repo, target_is_directory=True)
+    monkeypatch.setattr(Path, "home", lambda: test_home)
+    monkeypatch.chdir(repo / "tests" if location == "current" else test_home)
     executable = tmp_path / "codex"
     record = tmp_path / "arguments.json"
     executable.write_text(
@@ -58,7 +68,7 @@ def test_launcher_opens_native_chat_without_a_task_or_worktree(store, tmp_path, 
     monkeypatch.setenv("CHAT_ARGUMENTS", str(record))
     before = git(Path(store.state.repo), "worktree", "list", "--porcelain")
     args = SimpleNamespace(
-        repo=Path(store.state.repo) / "tests",
+        repo=repo / "tests" if location == "explicit" else None,
         task=None,
         base=None,
         kernel_review=None,
@@ -84,6 +94,7 @@ def test_launcher_opens_native_chat_without_a_task_or_worktree(store, tmp_path, 
     assert len(sessions) == 1
     state = load(sessions[0])
     assert state["problem"] is None and state["run"] is None
+    assert f"Repository: {store.state.repo}" in capsys.readouterr().out
     assert before == git(Path(store.state.repo), "worktree", "list", "--porcelain")
     assert not list(args.state_dir.glob("*/state.json"))
 
@@ -96,6 +107,27 @@ def test_launcher_opens_native_chat_without_a_task_or_worktree(store, tmp_path, 
         value for value in argv if value.startswith("sqlite_home=")
     )
     assert list(args.state_dir.glob("chats/*/chat.json")) == sessions
+
+
+@pytest.mark.parametrize("location", ["no_default", "explicit_missing", "explicit_not_git"])
+def test_invalid_repository_does_not_create_chat(store, tmp_path, monkeypatch, location):
+    test_home = tmp_path / "home"
+    test_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: test_home)
+    monkeypatch.chdir(test_home)
+    if location != "no_default":
+        (test_home / "unitycatalog").symlink_to(Path(store.state.repo), target_is_directory=True)
+    paths = {
+        "no_default": None,
+        "explicit_missing": test_home / "missing",
+        "explicit_not_git": test_home,
+    }
+    args = SimpleNamespace(repo=paths[location], state_dir=tmp_path / "sessions")
+
+    with pytest.raises(ValueError, match="--repo"):
+        chat.launch_chat(args)
+
+    assert not args.state_dir.exists()
 
 
 def test_problem_agreement_precedes_design_and_does_not_create_a_run(session):

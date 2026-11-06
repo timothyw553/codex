@@ -18,11 +18,10 @@ uv run --project harnesses/unitycatalog codex-uc \
   --repo /path/to/unitycatalog
 ```
 
-If `codex-uc` is on your PATH, run it from your Unity Catalog checkout or any
-directory inside it:
+If `codex-uc` is on your PATH, run it from your Unity Catalog checkout. You can also
+run it from your home directory when Unity Catalog is cloned at `~/unitycatalog`:
 
 ```sh
-cd /path/to/unitycatalog
 codex-uc
 ```
 
@@ -38,8 +37,9 @@ criteria, and constraints. Design work starts only after you confirm that agreem
 The second agreement confirms the exact saved design before source changes. Both appear
 inside the terminal chat. The controller handles run paths and design hashes.
 
-The command uses the current Git repository. Use `--repo /path/to/unitycatalog` from
-another directory. When design work starts, the controller fetches `origin/main` and
+The command uses the current Git repository. Outside Git, it uses `~/unitycatalog`.
+Use `--repo /path/to/unitycatalog` to choose another checkout. The startup message shows
+the selected repository. When design work starts, the controller fetches `origin/main` and
 creates an isolated worktree. Use `--base REF` to select an existing local ref. Your
 original checkout can have unfinished work. The chat reads the original checkout during
 problem discussion and uses the controller's worktree for the task. Source edits and

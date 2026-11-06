@@ -44,6 +44,24 @@ def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
     return result.stdout.rstrip("\n")
 
 
+def resolve_repository(path: Path | None) -> Path:
+    candidates = (
+        [path.expanduser()] if path is not None else [Path.cwd(), Path.home() / "unitycatalog"]
+    )
+    for candidate in candidates:
+        if not candidate.is_dir():
+            continue
+        try:
+            return Path(git(candidate, "rev-parse", "--show-toplevel")).resolve()
+        except subprocess.CalledProcessError:
+            continue
+    if path is not None:
+        raise ValueError(f"Not a Git repository: {path}. Use --repo /path/to/unitycatalog.")
+    raise ValueError(
+        "No Git repository found here or at ~/unitycatalog. Use --repo /path/to/unitycatalog."
+    )
+
+
 def inside(root: Path, relative: str) -> Path:
     path = Path(relative)
     if path.is_absolute() or ".." in path.parts:

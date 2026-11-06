@@ -10,7 +10,7 @@ from pathlib import Path
 from .chat import launch_chat, resume_chat
 from .contracts import RunState
 from .runtime import Runtime
-from .storage import Store, checkout, git, save
+from .storage import Store, checkout, git, resolve_repository, save
 from .workflow import Workflow
 
 
@@ -32,7 +32,7 @@ def find_kernel_skill(explicit: str | None) -> Path:
 
 
 def start(args) -> Store:
-    repo = Path(git(args.repo.resolve(), "rev-parse", "--show-toplevel")).resolve()
+    repo = resolve_repository(args.repo)
     skill = find_kernel_skill(args.kernel_review)
     if args.base:
         base = git(repo, "rev-parse", args.base + "^{commit}")
@@ -67,7 +67,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     cli = argparse.ArgumentParser(
         description="Build focused Unity Catalog changes with Codex.",
         epilog='Run codex-uc to chat, or codex-uc "Describe the change". '
-        "Use --repo PATH from another directory.",
+        "Outside Git, use ~/unitycatalog. Use --repo PATH to choose a repository.",
     )
     commands = cli.add_subparsers(dest="command", required=True)
     state_dir = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "codex-uc"
@@ -78,7 +78,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         initial = commands.add_parser(name, help=help_text)
         initial.add_argument("task", nargs="?", help="Optional opening message.")
         initial.add_argument(
-            "--repo", type=Path, default=Path.cwd(), help="Default: the current Git repository."
+            "--repo", type=Path, help="Default: the current Git repository, then ~/unitycatalog."
         )
         initial.add_argument(
             "--base", help="Use this existing ref instead of fetching origin/main."
@@ -95,7 +95,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "resume", help="Continue the latest chat in this repository."
     )
     continuation.add_argument("run", nargs="?", type=Path)
-    continuation.add_argument("--repo", type=Path, default=Path.cwd())
+    continuation.add_argument("--repo", type=Path)
     continuation.add_argument("--state-dir", type=Path, default=state_dir)
     discussion = commands.add_parser(
         "discuss", help="Discuss or revise a design before implementation."
