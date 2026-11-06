@@ -18,8 +18,8 @@ uv run --project harnesses/unitycatalog codex-uc \
   --repo /path/to/unitycatalog
 ```
 
-If `codex-uc` is on your PATH, run it from your Unity Catalog checkout. You can also
-run it from your home directory when Unity Catalog is cloned at `~/unitycatalog`:
+If `codex-uc` is on your PATH, run it from your checkout or from a directory that
+contains several repositories:
 
 ```sh
 codex-uc
@@ -29,7 +29,7 @@ Talk to it as you would talk to Codex. For example, start with "Listing tables f
 slow, but I do not know why." Ask questions, give examples, and correct assumptions.
 You can also supply an opening message: `codex-uc "Help me understand table listing"`.
 The conversation stays open after each reply. `codex-uc resume` continues your latest
-chat in this repository. A saved chat path can select a specific chat.
+chat in this workspace. A saved chat path can select a specific chat.
 
 The chat starts with read-only source access. Opening it requires no task, model call,
 worktree, or installed review skill. The first agreement records the problem, success
@@ -40,14 +40,20 @@ inside the terminal chat. The controller handles run paths and design hashes.
 If design generation fails, ask the chat to try again. The controller keeps your last
 design discussion. A failed or unfinished design cannot be approved or implemented.
 
-The command uses the current Git repository. Outside Git, it uses `~/unitycatalog`.
-Use `--repo /path/to/unitycatalog` to choose another checkout. The startup message shows
-the selected repository. When design work starts, the controller fetches `origin/main` and
-creates an isolated worktree. Use `--base REF` to select an existing local ref. Your
-original checkout can have unfinished work. The chat reads the original checkout during
-problem discussion and uses the controller's worktree for the task. Source edits and
-test evidence remain in that worktree and its saved artifacts.
-Each run manages one repository.
+Chat keeps the directory where you launch it. That directory can be your home directory
+or the parent of `unitycatalog/` and `delta/`. It does not need to be a Git repository.
+Use `--repo PATH` only when you want to open another directory.
+
+Describe a task across both repositories in the same conversation. The chat selects the
+repository paths through the design tool. The controller creates sibling worktrees from
+each repository's remote default branch. It handles `main` and `master` independently.
+You can discuss a different target ref or use `--base REF` for the first repository.
+Your original checkouts can have unfinished work.
+
+One design and one implementation cover the selected repositories. The design lists each
+target commit, exact file paths, and test commands. Both review workflows inspect the full
+change. Each changed repository gets its own PR draft. A repository added during design
+keeps the existing edits and requires approval of the revised design before implementation.
 
 The controller finds `kernel-review` in Codex's plugin cache. Use
 `--kernel-review /path/to/kernel-review/SKILL.md` to select it explicitly.
@@ -59,7 +65,7 @@ sessions with external tools disabled.
 
 To use an existing Codex launcher, set `CODEX_UC_CHAT_COMMAND` to its command and
 arguments. For example: `CODEX_UC_CHAT_COMMAND="my-codex-launcher --" codex-uc`.
-The launcher runs from the selected repository and receives the normal Codex flags.
+The launcher runs from the selected workspace and receives the normal Codex flags.
 The command runs without a shell. `--codex-bin` selects an explicit executable instead.
 `codex-uc resume` uses the same launcher setting.
 
@@ -85,7 +91,7 @@ Keep run artifacts private; they can contain local paths and unpublished task de
    The design lists exact files, reasons, behavior, checks, and a
    change budget. Scope changes stop the run for design discussion.
 2. The UC `REVIEW.md` workflow and the full `kernel-review` workflow run in separate
-   Codex sessions against the same frozen patch. Each workflow keeps its own reviewers
+   Codex sessions against the same frozen patches in every selected repository. Each workflow keeps its own reviewers
    and disproof steps. The controller checks actual completed agent events. Review
    source trees are outside the reviewers' writable directories.
 3. The selector defaults to leaving code unchanged. It groups duplicate findings and
@@ -105,7 +111,7 @@ Keep run artifacts private; they can contain local paths and unpublished task de
    At most one wording rewrite runs. It must preserve protected evidence and uncertainty.
    A separate meaning check can reject the rewrite. These checks cannot prove that prose
    is clear or equivalent. The original text remains available.
-7. The final PR draft follows the repository template and `[Component]` title convention.
+7. Each final PR draft follows its repository template and `[Component]` title convention.
    It describes the actual diff and saved test results. The command creates no PR or review
    comments. A completed model turn does not mark the patch ready.
 
@@ -116,7 +122,7 @@ the canonical review reports. Run state uses an atomic file update and a process
 Test commands must produce JUnit XML. Python's pytest and the JVM test runners used by
 Unity Catalog support this format. The report pattern is part of the approved design.
 Checks that need unavailable external services leave their claims unverified.
-The command sandbox can write to the source checkout and a private temporary directory.
+The command sandbox can write to the selected source worktrees and a private temporary directory.
 It cannot write to saved approvals, reports, or decisions. A check gets network access
 only when its approved design requests it. UC tests that start local servers need this.
 Keep build-tool caches in ignored `target` directories. Install the required JDK and
@@ -132,5 +138,6 @@ uv run --project harnesses/unitycatalog --group dev ruff format --check harnesse
 
 Tests use temporary Git repositories, real local commands, and recorded agent results.
 They check workflow controls and evidence handling without making model calls.
-Set `CODEX_UC_LIVE_TESTS=1` to also check command sandbox enforcement with installed Codex.
+Set `CODEX_UC_LIVE_TESTS=1` to also check model schemas, native edits across sibling
+worktrees, and command sandbox enforcement with installed Codex.
 Real task trials are still needed to measure code quality and writing quality.

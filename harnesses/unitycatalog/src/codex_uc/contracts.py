@@ -84,6 +84,7 @@ class Review(Record):
         description="Verification steps that finished, using their required_gates names. These are separate from reviewer agents."
     )
     gates_complete: bool
+    reviewed_repositories: list[str] = Field(default_factory=list)
 
 
 class Choice(Record):
@@ -133,6 +134,18 @@ class PullRequest(Record):
     body: str
 
 
+class RepositoryTarget(Record):
+    path: str
+    base: str | None = None
+
+
+class Repository(Record):
+    name: str
+    path: str
+    base: str
+    target: str
+
+
 class RunState(Record):
     version: Literal[1] = 1
     repo: str
@@ -140,6 +153,7 @@ class RunState(Record):
     base: str
     task: str
     kernel_skill: str
+    repositories: list[Repository] = Field(default_factory=list)
     model: str | None = None
     codex_bin: str | None = None
     phase: str = "design"

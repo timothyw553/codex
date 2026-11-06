@@ -1,12 +1,11 @@
 """Reproduce shortlisted claims before exposing them to the repair worker."""
 
 import subprocess
-from pathlib import Path
 
 from .contracts import EvidenceVerdict, Reproduction
 from .evidence import proves_failure, run_check
 from .prompts import audit_prompt, reproduction_prompt
-from .storage import checkout, git, load, save, snapshot
+from .storage import git, load, save
 
 
 def verify_candidates(store, runtime, candidates: list[dict]) -> list[dict]:
@@ -25,7 +24,7 @@ def verify_candidates(store, runtime, candidates: list[dict]) -> list[dict]:
             continue
         source = directory / "source"
         if not source.exists():
-            checkout(Path(state.repo), source, state.base, state.candidate)
+            store.checkout(source, state.candidate)
         try:
             reproduction = runtime.ask(
                 source,
@@ -45,15 +44,15 @@ def verify_candidates(store, runtime, candidates: list[dict]) -> list[dict]:
             if check.purpose != "test":
                 raise ValueError("A formatting command cannot prove a behavioral failure.")
             patch = directory / "test.patch"
-            patch.write_text(git(source, "diff", "--binary", state.candidate, test_tree) + "\n")
+            patch.write_text(store.diff(state.candidate, test_tree) + "\n")
             baseline = run_check(source, check, directory / "baseline", runtime.execute)
-            if snapshot(source) != test_tree:
+            if store.snapshot(source) != test_tree:
                 raise ValueError("The reproduction command changed source files.")
             if not proves_failure(baseline, reproduction):
                 raise ValueError("A fresh test report did not prove the claimed assertion failure.")
             base_source = directory / "base-source"
             if not base_source.exists():
-                checkout(Path(state.repo), base_source, state.base)
+                store.checkout(base_source)
             try:
                 git(base_source, "apply", "--check", str(patch))
             except subprocess.CalledProcessError:

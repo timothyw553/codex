@@ -10,7 +10,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .storage import load, resolve_repository, save
+from .storage import git, load, save
 from .writing import STYLE
 
 INSTRUCTIONS = (
@@ -35,8 +35,11 @@ If an agreement is declined or canceled, continue the discussion. Do not repeat 
 Never ask the user to type workflow commands, hashes, or saved-run paths to keep chatting.
 
 Use unitycatalog.read_workflow for the current state, design, source path, and evidence.
-Before a task exists, inspect the current repository. After design work starts, inspect
-the worktree returned by the controller. It starts from the selected target branch.
+Before a task exists, inspect the current workspace. It can contain several repositories.
+Pass every repository needed for the task in propose_design's repositories argument.
+Inspect their instructions and target branches. The user does not need command-line flags.
+After design work starts, inspect the worktrees returned by the controller. One design
+and implementation cover all selected repositories. They start from their target branches.
 Use final_source to inspect the completed patch when that field is present.
 All source changes go through implement_design and its existing review and test controls.
 The chat has read-only source access. Do not try to bypass it, change saved controller
@@ -89,20 +92,26 @@ def native_chat(root: Path, prompt: str | None = None, *, resume: bool = False) 
     if state["model"]:
         command.extend(["--model", state["model"]])
     if resume:
-        command.extend(["resume", "--last"])
+        command.extend(["resume", "--last", "--all"])
     # Keep this chat separate from unrelated Codex sessions in the same repository.
     command.extend(["--config", "sqlite_home=" + json.dumps(str(root / "history"))])
     if prompt:
         command.append(prompt)
-    print(f"Repository: {state['repo']}", flush=True)
+    print(f"Workspace: {state['repo']}", flush=True)
     print(f"Chat: {root}", flush=True)
     return subprocess.run(command, cwd=state["repo"], check=False).returncode
 
 
 def launch_chat(args) -> int:
-    repo = resolve_repository(args.repo)
+    repo = (args.repo.expanduser() if args.repo is not None else Path.cwd()).resolve()
+    if not repo.is_dir():
+        raise ValueError(f"Workspace directory does not exist: {repo}")
     state_dir = args.state_dir.expanduser().resolve()
-    if state_dir.is_relative_to(repo):
+    try:
+        source_repo = Path(git(repo, "rev-parse", "--show-toplevel"))
+    except subprocess.CalledProcessError:
+        source_repo = None
+    if source_repo and state_dir.is_relative_to(source_repo):
         raise ValueError("Store chat state outside the source repository.")
     identifier = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + secrets.token_hex(4)
     root = state_dir / "chats" / identifier
@@ -127,9 +136,16 @@ def resume_chat(args) -> int:
     if args.run:
         root = args.run.expanduser().resolve()
     else:
-        repo = str(resolve_repository(args.repo))
+        repo = str((args.repo.expanduser() if args.repo is not None else Path.cwd()).resolve())
         roots = sorted(args.state_dir.expanduser().glob("chats/*/chat.json"), reverse=True)
         root = next((path.parent for path in roots if load(path)["repo"] == repo), None)
         if root is None:
-            raise ValueError("There is no saved chat for this repository. Run codex-uc first.")
+            root = next(
+                (path.parent for path in roots if Path(load(path)["repo"]).is_relative_to(repo)),
+                None,
+            )
+        if root is None:
+            raise ValueError("There is no saved chat for this workspace. Run codex-uc first.")
+        state = load(root / "chat.json")
+        save(root / "chat.json", {**state, "repo": repo})
     return native_chat(root, resume=True)

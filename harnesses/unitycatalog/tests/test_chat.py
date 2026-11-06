@@ -45,6 +45,140 @@ def chat_design(store, design):
     return design
 
 
+@pytest.mark.parametrize("has_repositories", [False, True])
+def test_chat_keeps_the_parent_directory_as_its_workspace(
+    store, tmp_path, monkeypatch, has_repositories
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    if has_repositories:
+        (workspace / "unitycatalog").symlink_to(Path(store.state.repo), target_is_directory=True)
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(Path, "home", lambda: workspace)
+    launched = []
+
+    def native(root, prompt):
+        launched.append(load(root / "chat.json"))
+        return 0
+
+    monkeypatch.setattr(chat, "native_chat", native)
+    args = SimpleNamespace(
+        repo=None,
+        task=None,
+        base=None,
+        kernel_review=None,
+        model=None,
+        codex_bin=None,
+        state_dir=workspace / ".state",
+    )
+
+    assert chat.launch_chat(args) == 0
+    assert launched[0]["repo"] == str(workspace)
+    assert launched[0]["run"] is None
+
+
+def test_design_tool_accepts_all_repositories_from_the_conversation(session, store, tmp_path):
+    delta = tmp_path / "delta"
+    git(Path(store.state.repo), "clone", str(store.state.repo), str(delta))
+    repositories = [
+        {"path": store.state.repo, "base": "main"},
+        {"path": str(delta), "base": "main"},
+    ]
+    state = load(session / "chat.json")
+    save(session / "chat.json", {**state, "problem": {"problem": store.state.task}})
+
+    async def exercise():
+        server = chat_server.ChatServer(session)
+
+        async def worker(action, message="", expected_hash="", progress=None):
+            assert action == "design"
+            assert load(session / "chat.json")["repositories"] == repositories
+            return "The design covers both repositories."
+
+        server.run_worker = worker
+        result = await server.call_tool(
+            "propose_design",
+            {"discussion": "Use both repositories.", "repositories": repositories},
+        )
+        assert "both repositories" in result
+
+    asyncio.run(exercise())
+
+
+def test_parent_workspace_design_request_identifies_missing_repository_arguments(session, store):
+    state = load(session / "chat.json")
+    save(
+        session / "chat.json",
+        {
+            **state,
+            "repo": str(Path(store.state.repo).parent),
+            "problem": {
+                "problem": store.state.task,
+                "success_criteria": ["Both implementations work."],
+                "constraints": [],
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="propose_design.repositories"):
+        chat_server.work(session, "design")
+
+    assert load(session / "chat.json")["run"] is None
+
+
+def test_parent_chat_runs_one_design_and_implementation_across_two_repositories(
+    session, store, tmp_path, workspace_runtime, monkeypatch
+):
+    delta = tmp_path / "delta"
+    git(Path(store.state.repo), "clone", store.state.repo, str(delta))
+    state = load(session / "chat.json")
+    save(
+        session / "chat.json",
+        {
+            **state,
+            "repo": str(Path(store.state.repo).parent),
+            "problem": {
+                "problem": store.state.task,
+                "success_criteria": ["Both implementations work."],
+                "constraints": [],
+            },
+        },
+    )
+    monkeypatch.setattr(chat_server, "Runtime", workspace_runtime)
+
+    async def exercise():
+        server = chat_server.ChatServer(session)
+
+        async def worker(action, message="", expected_hash="", progress=None):
+            chat_server.work(session, action, message, expected_hash)
+            return chat_server.describe(session)
+
+        async def confirm(message):
+            assert "repo/value.py" in message and "delta/value.py" in message
+            return True
+
+        server.run_worker = worker
+        server.confirm = confirm
+        design = json.loads(
+            await server.call_tool(
+                "propose_design",
+                {
+                    "discussion": "Use both repositories.",
+                    "repositories": [
+                        {"path": store.state.repo, "base": "main"},
+                        {"path": str(delta), "base": "main"},
+                    ],
+                },
+            )
+        )
+        assert set(design["repository_worktrees"]) == {"repo", "delta"}
+        result = json.loads(await server.call_tool("implement_design", {}))
+        assert result["phase"] == "ready"
+        assert {path.name for path in Path(result["final_source"]).iterdir()} == {"repo", "delta"}
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize("location", ["explicit", "current", "home"])
 @pytest.mark.parametrize("wrapped", [False, True])
 def test_launcher_opens_native_chat_without_a_task_or_worktree(
@@ -98,11 +232,12 @@ def test_launcher_opens_native_chat_without_a_task_or_worktree(
 
     launched = json.loads(record.read_text())
     argv = launched["argv"]
-    assert launched["cwd"] == store.state.repo
+    workspace = repo / "tests" if location in {"explicit", "current"} else test_home
+    assert launched["cwd"] == str(workspace)
     assert launched["config"] == os.environ["CODEX_HOME"]
     assert launched["wrapped"] == ("1" if wrapped else None)
     assert argv[argv.index("--sandbox") + 1] == "read-only"
-    assert argv[argv.index("--cd") + 1] == store.state.repo
+    assert argv[argv.index("--cd") + 1] == str(workspace)
     assert any("codex_uc.chat_server" in value for value in argv)
     assert not any(value.startswith("mcp_servers=") for value in argv)
     assert "features.apps=false" not in argv
@@ -117,7 +252,7 @@ def test_launcher_opens_native_chat_without_a_task_or_worktree(
     assert len(sessions) == 1
     state = load(sessions[0])
     assert state["problem"] is None and state["run"] is None
-    assert f"Repository: {store.state.repo}" in capsys.readouterr().out
+    assert f"Workspace: {workspace}" in capsys.readouterr().out
     assert before == git(Path(store.state.repo), "worktree", "list", "--porcelain")
     assert not list(args.state_dir.glob("*/state.json"))
 
@@ -134,25 +269,45 @@ def test_launcher_opens_native_chat_without_a_task_or_worktree(
     assert list(args.state_dir.glob("chats/*/chat.json")) == sessions
 
 
-@pytest.mark.parametrize("location", ["no_default", "explicit_missing", "explicit_not_git"])
-def test_invalid_repository_does_not_create_chat(store, tmp_path, monkeypatch, location):
+@pytest.mark.parametrize("location", ["missing", "file"])
+def test_invalid_workspace_does_not_create_chat(tmp_path, monkeypatch, location):
     test_home = tmp_path / "home"
     test_home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: test_home)
     monkeypatch.chdir(test_home)
-    if location != "no_default":
-        (test_home / "unitycatalog").symlink_to(Path(store.state.repo), target_is_directory=True)
-    paths = {
-        "no_default": None,
-        "explicit_missing": test_home / "missing",
-        "explicit_not_git": test_home,
-    }
-    args = SimpleNamespace(repo=paths[location], state_dir=tmp_path / "sessions")
+    path = test_home / location
+    if location == "file":
+        path.write_text("This is not a directory.")
+    args = SimpleNamespace(repo=path, state_dir=tmp_path / "sessions")
 
-    with pytest.raises(ValueError, match="--repo"):
+    with pytest.raises(ValueError, match="Workspace directory"):
         chat.launch_chat(args)
 
     assert not args.state_dir.exists()
+
+
+def test_resume_from_a_parent_directory_keeps_the_same_conversation(
+    session, store, monkeypatch, tmp_path
+):
+    parent = Path(store.state.repo).parent
+    monkeypatch.chdir(parent)
+    state_dir = tmp_path / "sessions"
+    saved = state_dir / "chats" / "latest"
+    saved.mkdir(parents=True)
+    save(saved / "chat.json", load(session / "chat.json"))
+    launched = []
+
+    def native(root, prompt=None, *, resume=False):
+        launched.append((root, resume, load(root / "chat.json")))
+        return 0
+
+    monkeypatch.setattr(chat, "native_chat", native)
+
+    assert chat.resume_chat(SimpleNamespace(run=None, repo=None, state_dir=state_dir)) == 0
+
+    assert launched[0][0] == saved
+    assert launched[0][1] is True
+    assert launched[0][2]["repo"] == str(parent)
 
 
 def test_problem_agreement_precedes_design_and_does_not_create_a_run(session):

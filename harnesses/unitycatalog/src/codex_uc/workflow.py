@@ -4,12 +4,12 @@ import hmac
 import re
 from pathlib import Path
 
-from .contracts import Design, PullRequest, Reproduction, Review, WorkResult
+from .contracts import Design, PullRequest, RepositoryTarget, Reproduction, Review, WorkResult
 from .evidence import proves_success, run_check
 from .prompts import design_prompt, worker_prompt
 from .proofs import verify_candidates
 from .reviews import review_pair, select
-from .storage import NeedsDiscussion, checkout, git, load, save, snapshot, validate_design
+from .storage import NeedsDiscussion, git, load, save
 from .writing import present
 
 
@@ -19,7 +19,9 @@ class Workflow:
         self.runtime = runtime
         self.announce = announce
 
-    def propose(self, discussion: str = "") -> str:
+    def propose(
+        self, discussion: str = "", repositories: list[RepositoryTarget] | None = None
+    ) -> str:
         store = self.store
         previous = store.root / "design.json"
         if previous.exists():
@@ -27,16 +29,32 @@ class Workflow:
         store.update(approved_design=None, phase="design_generating", candidate=None, message="")
         try:
             request = store.root / "design-request.json"
+            saved = load(request) if request.exists() else {}
             if not discussion and request.exists():
-                discussion = load(request)["discussion"]
-            save(request, {"discussion": discussion})
+                discussion = saved["discussion"]
+            if repositories is None:
+                repositories = [
+                    RepositoryTarget.model_validate(item) for item in saved.get("repositories", [])
+                ]
+            repositories = [store.canonical_target(target) for target in repositories]
+            save(
+                request,
+                {
+                    "discussion": discussion,
+                    "repositories": [repo.model_dump() for repo in repositories],
+                },
+            )
+            if repositories:
+                from .cli import include_repositories
+
+                include_repositories(store, repositories)
             design = self.runtime.ask(
                 Path(store.state.worktree),
                 design_prompt(store, discussion),
                 Design,
                 label="design-" + str(len(list((store.root / "agents").glob("design-*")))),
             )
-            validate_design(Path(store.state.worktree), design)
+            store.validate_design(design)
             save(previous, design.model_dump())
             text = self.show_design()
         except (Exception, KeyboardInterrupt) as error:
@@ -52,6 +70,11 @@ class Workflow:
     def show_design(self) -> str:
         design = self.store.design()
         paragraphs = [design.summary, design.architecture]
+        if self.store.state.repositories:
+            paragraphs.append(
+                "Repositories and target commits:\n\n"
+                + self.store.source_context(Path(self.store.state.worktree))
+            )
         for label, entries in (
             ("Required behavior", design.behavior),
             ("Interfaces", design.interfaces),
@@ -86,7 +109,7 @@ class Workflow:
             raise ValueError("The design changed. Read it again before approving it.")
         if design.questions:
             raise ValueError("Resolve the design questions before approving it.")
-        validate_design(Path(store.state.worktree), design)
+        store.validate_design(design)
         store.update(approved_design=expected_hash, phase="approved", repair_batches=0, message="")
 
     def run(self) -> str:
@@ -108,7 +131,7 @@ class Workflow:
             raise ValueError(store.state.message)
         if store.state.phase == "ready":
             final = load(store.artifacts / "final.json")
-            if snapshot(worktree) != final["tree"]:
+            if store.snapshot(worktree) != final["tree"]:
                 raise NeedsDiscussion(
                     "The source changed after the checks. Review the design again."
                 )
@@ -127,7 +150,7 @@ class Workflow:
                 raise NeedsDiscussion(result.reason)
             tree = store.freeze("candidate", worktree)
             store.scope(store.state.base, tree)
-            if tree == git(worktree, "rev-parse", store.state.base + "^{tree}"):
+            if tree == store.base_tree:
                 raise ValueError("Implementation produced no source changes.")
             store.update(candidate=tree, phase="candidate_draft")
         if store.state.phase == "candidate_draft":
@@ -165,7 +188,7 @@ class Workflow:
                 raise ValueError(
                     f"Repair setup was interrupted. Inspect {source} before continuing."
                 )
-            checkout(Path(store.state.repo), source, store.state.base, store.state.candidate)
+            store.checkout(source, store.state.candidate)
             for issue in load(store.artifacts / "selected.json"):
                 git(source, "apply", "--check", issue["test_patch"])
                 git(source, "apply", issue["test_patch"])
@@ -178,7 +201,7 @@ class Workflow:
             source = Path(repair["source"])
             result = self.runtime.ask(
                 source,
-                worker_prompt(store, store.artifacts / "selected.json")
+                worker_prompt(store, store.artifacts / "selected.json", source=source)
                 + "\nDesign approval: "
                 + store.approval_hash(),
                 WorkResult,
@@ -198,8 +221,8 @@ class Workflow:
                 raise NeedsDiscussion(
                     "The repair changed a reproduction test. Its evidence is no longer valid."
                 )
-            counts = git(source, "diff", "--numstat", repair["test_tree"], tree)
-            if sum(int(n) for line in counts.splitlines() for n in line.split("\t")[:2]) > 80:
+            _, lines = store.changes(repair["test_tree"], tree)
+            if lines > 80:
                 raise NeedsDiscussion("The repair exceeds 80 changed lines. Discuss a smaller fix.")
             store.scope(store.state.base, tree)
             save(store.artifacts / "final.json", {"source": str(source), "tree": tree})
@@ -208,7 +231,7 @@ class Workflow:
             self.announce("I am checking the final patch and the original regression tests.")
             final = load(store.artifacts / "final.json")
             source = Path(final["source"])
-            if snapshot(source) != final["tree"]:
+            if store.snapshot(source) != final["tree"]:
                 raise NeedsDiscussion("The source changed before the final checks.")
             for index, issue in enumerate(load(store.artifacts / "selected.json")):
                 reproduction = Reproduction.model_validate(issue["reproduction"])
@@ -226,21 +249,20 @@ class Workflow:
                 )
                 if not proves_success(result):
                     raise ValueError(f"The required check did not pass: {check.name}")
-            if snapshot(source) != final["tree"]:
+            if store.snapshot(source) != final["tree"]:
                 raise NeedsDiscussion(
                     "A check changed source files. Inspect the diff before continuing."
                 )
             if source != worktree:
-                if snapshot(worktree) != store.state.candidate:
+                if store.snapshot(worktree) != store.state.candidate:
                     raise NeedsDiscussion(
                         "The original worktree changed while repairs were in progress."
                     )
-                git(worktree, "read-tree", "--reset", "-u", final["tree"])
-                git(worktree, "reset", "--mixed", store.state.base)
+                store.restore(worktree, final["tree"])
             store.update(phase="drafting")
         if store.state.phase == "drafting":
             self.draft_pr()
-            if snapshot(worktree) != load(store.artifacts / "final.json")["tree"]:
+            if store.snapshot(worktree) != load(store.artifacts / "final.json")["tree"]:
                 raise NeedsDiscussion("The source changed after the final checks.")
             store.update(phase="ready", message="The patch is ready for your review.")
         return self.ready_message()
@@ -248,6 +270,37 @@ class Workflow:
     def draft_pr(self, *, candidate: bool = False) -> None:
         store = self.store
         worktree = Path(store.state.worktree)
+        sources = store.sources(worktree)
+        revision = (
+            store.state.candidate if candidate else load(store.artifacts / "final.json")["tree"]
+        )
+        changed, _ = store.changes(store.state.base, revision)
+        drafts = {}
+        name = "candidate-pr" if candidate else "pr"
+        for repo in store.repositories:
+            if store.state.repositories and not any(
+                path.startswith(repo.name + "/") for path in changed
+            ):
+                continue
+            directory = (
+                store.artifacts / "prs" / repo.name if store.state.repositories else store.artifacts
+            )
+            directory.mkdir(parents=True, exist_ok=True)
+            self._draft_pr(sources[repo.name], repo.base, directory, candidate=candidate)
+            drafts[repo.name] = load(directory / f"{name}.json")
+        if store.state.repositories:
+            save(store.artifacts / f"{name}.json", {"repositories": drafts})
+            (store.artifacts / f"{name}.md").write_text(
+                "\n\n".join(
+                    f"## {repo}\n\n{draft['title']}\n\n{draft['body']}"
+                    for repo, draft in drafts.items()
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+    def _draft_pr(self, worktree: Path, base: str, directory: Path, *, candidate: bool) -> None:
+        store = self.store
         test_evidence = (
             "The controller has not run its checks yet. Mark them pending. Do not claim they passed."
             if candidate
@@ -255,16 +308,20 @@ class Workflow:
         )
         draft = self.runtime.ask(
             worktree,
-            f"""Write a PR title and description for the final diff against {store.state.base}.
+            f"""Write a PR title and description for this repository's diff against {base}.
 Read the repository's current PR template and CODE_REVIEW.md. Preserve template sections.
 Use the [Component] title prefix. Explain the problem, a concrete example, the exact fix,
 compatibility, and tests in plain English for a student finishing high-school computer science.
 Use the approved design at {store.root / "design.json"}.
+The full task can span several repositories. Describe only this repository's changes.
+Explain any dependency on its companion changes. Do not include private links or local paths.
 Describe the current implementation. {test_evidence}
 Keep private information out of all text. Return a draft only. Do not publish anything.
 """,
             PullRequest,
-            label=("candidate-pr-" if candidate else "pr-") + store.approval_hash(),
+            label=("candidate-pr-" if candidate else "pr-")
+            + store.approval_hash()
+            + ("-" + worktree.name if store.state.repositories else ""),
         )
         if not re.match(r"^\[[^\]\n]+\] \S", draft.title):
             raise ValueError("The PR title needs the repository's [Component] prefix.")
@@ -282,8 +339,8 @@ Keep private information out of all text. Return a draft only. Do not publish an
         ):
             title, body = draft.title, draft.body
         name = "candidate-pr" if candidate else "pr"
-        save(store.artifacts / f"{name}.json", {"title": title, "body": body})
-        (store.artifacts / f"{name}.md").write_text(title + "\n\n" + body + "\n", encoding="utf-8")
+        save(directory / f"{name}.json", {"title": title, "body": body})
+        (directory / f"{name}.md").write_text(title + "\n\n" + body + "\n", encoding="utf-8")
 
     def ready_message(self) -> str:
         store = self.store

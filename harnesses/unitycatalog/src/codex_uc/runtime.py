@@ -106,7 +106,7 @@ class Runtime:
                 env={"TMPDIR": temporary, "TMP": temporary, "TEMP": temporary},
                 sandbox_policy=WorkspaceWriteSandboxPolicy(
                     type="workspaceWrite",
-                    writable_roots=[temporary],
+                    writable_roots=[str(worktree), temporary],
                     exclude_tmpdir_env_var=True,
                     exclude_slash_tmp=True,
                     network_access=check.network_access,

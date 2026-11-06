@@ -6,8 +6,14 @@ from pathlib import Path
 def design_prompt(store, discussion: str) -> str:
     notes = Path(__file__).with_name("unitycatalog.md")
     return f"""Discuss and propose a Unity Catalog design. Do not implement it.
-Read the task at {store.root / "task.txt"}, the source at {store.state.worktree},
+Read the task at {store.root / "task.txt"}, the source workspace at {store.state.worktree},
 the repository's instructions and CODE_REVIEW.md, and the history lessons at {notes}.
+Source repositories and pinned targets:
+{store.source_context(Path(store.state.worktree))}
+Inspect every repository needed by the task. The workspace can contain sibling Git worktrees.
+Use each repository's listed path prefix in files and check cwd values. Keep commands and
+JUnit globs relative to each check cwd. Include tests for every repository with source changes.
+Describe cross-repository interfaces and the order needed to build and test companion changes.
 Inspect architecture, callers, exact dependency interfaces and lifecycle contracts,
 persisted state, wire behavior, authorization targets, compatibility, cancellation,
 concurrency, failures, and important edge cases where relevant to this task.
@@ -29,7 +35,7 @@ User's latest design discussion: {discussion or "Propose the initial design."}
 """
 
 
-def worker_prompt(store, selected: Path | None = None) -> str:
+def worker_prompt(store, selected: Path | None = None, *, source: Path | None = None) -> str:
     if selected:
         action = f"""Make only the repairs selected in {selected}.
 Each selected finding has a failing test and verified evidence. Read those artifacts.
@@ -41,6 +47,9 @@ This is the only repair batch. Stop if a fix needs a different design or broader
         action = f"Implement the task at {store.root / 'task.txt'} using the approved design."
     return f"""{action}
 Read the approved design at {store.root / "design.json"} and CODE_REVIEW.md in the source.
+Source repositories and pinned targets:
+{store.source_context(source or Path(store.state.worktree))}
+Work across these repositories in this one task. Keep files outside them unchanged.
 The controller has verified the user's design approval. Work only within that design.
 Inspect the real interfaces and nearby tests before editing. Use existing helpers.
 Every changed file needs its listed reason. Make no unrelated cleanup or refactors.

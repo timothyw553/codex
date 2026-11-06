@@ -12,9 +12,9 @@ from pathlib import Path
 
 from pydantic import Field
 
-from .contracts import Record
+from .contracts import Record, RepositoryTarget
 from .runtime import Runtime
-from .storage import Store, load, save
+from .storage import Store, load, resolve_repository, save
 from .workflow import Workflow
 
 
@@ -33,10 +33,13 @@ TOOLS = [
     },
     {
         "name": "propose_design",
-        "description": "Investigate or revise the design for the agreed problem. Include decisions from the chat. An empty discussion reuses the saved discussion. Requires problem confirmation. Source access is read-only.",
+        "description": "Investigate or revise one design across all repositories needed for the agreed problem. Select their local paths and optional target refs from the conversation; no user command-line flags are needed. Existing work is retained when a repository is added. An empty discussion reuses the saved discussion. Requires problem confirmation. Source access is read-only.",
         "inputSchema": {
             "type": "object",
-            "properties": {"discussion": {"type": "string", "default": ""}},
+            "properties": {
+                "discussion": {"type": "string", "default": ""},
+                "repositories": {"type": "array", "items": RepositoryTarget.model_json_schema()},
+            },
             "additionalProperties": False,
         },
     },
@@ -65,13 +68,18 @@ def design_report(root: Path, expected_hash: str) -> str | None:
 
 def describe(root: Path) -> str:
     session = load(root / "chat.json")
-    result = {"phase": "problem_discussion", "problem": session["problem"]}
+    result = {
+        "phase": "problem_discussion",
+        "workspace": session["repo"],
+        "problem": session["problem"],
+    }
     if session["problem"]:
         result["phase"] = "problem_agreed"
     if session["run"]:
         store = Store(Path(session["run"]))
         result.update(store.state.model_dump())
         result["run"] = str(store.root)
+        result["repository_worktrees"] = {name: str(path) for name, path in store.sources().items()}
         if store.design_ready:
             result["design"] = store.design().model_dump()
             result["design_hash"] = store.approval_hash()
@@ -98,6 +106,14 @@ def work(root: Path, action: str, message: str = "", expected_hash: str = "") ->
         from .cli import start
 
         problem = Problem.model_validate(session["problem"])
+        if not session.get("repositories"):
+            try:
+                resolve_repository(Path(session["repo"]))
+            except ValueError:
+                raise ValueError(
+                    "Select the task's Git repository paths in propose_design.repositories. "
+                    "The chat workspace itself does not need to be a Git repository."
+                ) from None
         task = (
             problem.problem
             + "\n\nSuccess criteria:\n"
@@ -114,6 +130,10 @@ def work(root: Path, action: str, message: str = "", expected_hash: str = "") ->
                 codex_bin=session["codex_bin"],
                 state_dir=Path(session["state_dir"]),
                 task=task,
+                repositories=[
+                    RepositoryTarget.model_validate(item)
+                    for item in session.get("repositories", [])
+                ],
             )
         )
         session["run"] = str(store.root)
@@ -122,7 +142,19 @@ def work(root: Path, action: str, message: str = "", expected_hash: str = "") ->
     with store.locked():
         workflow = Workflow(store, Runtime(store))
         if action == "design":
-            text = workflow.propose(message)
+            repositories = session.get("repositories")
+            try:
+                text = workflow.propose(
+                    message,
+                    [RepositoryTarget.model_validate(item) for item in repositories]
+                    if repositories is not None
+                    else None,
+                )
+            finally:
+                request = store.root / "design-request.json"
+                if request.exists():
+                    session["repositories"] = load(request).get("repositories", [])
+                    save(root / "chat.json", session)
             save(
                 store.root / "chat-design.json",
                 {"design_hash": store.approval_hash(), "text": text},
@@ -263,8 +295,23 @@ class ChatServer:
         if not session["problem"]:
             raise ValueError("First discuss and agree on the problem.")
         if name == "propose_design":
-            if set(arguments) - {"discussion"}:
-                raise ValueError("propose_design accepts only discussion.")
+            if set(arguments) - {"discussion", "repositories"}:
+                raise ValueError("propose_design accepts only discussion and repositories.")
+            if "repositories" in arguments:
+                if not isinstance(arguments["repositories"], list):
+                    raise ValueError(
+                        "repositories must list the source repositories for this task."
+                    )
+                repositories = [
+                    RepositoryTarget.model_validate(item) for item in arguments["repositories"]
+                ]
+                session["repositories"] = [
+                    repo.model_copy(
+                        update={"path": str(resolve_repository(Path(repo.path)))}
+                    ).model_dump()
+                    for repo in repositories
+                ]
+                save(self.root / "chat.json", session)
             return await self.run_worker(
                 "design", arguments.get("discussion", ""), progress=progress
             )

@@ -23,7 +23,7 @@ from codex_uc.contracts import (
     Selection,
     WorkResult,
 )
-from codex_uc.storage import Store, checkout, git, load, save, snapshot
+from codex_uc.storage import Store, checkout, git, load, save
 
 
 def execute_local(worktree, check):
@@ -171,6 +171,7 @@ class FakeRuntime:
         self.audit_valid = True
         self.no_findings = False
         self.wrong_failure = False
+        self.review_coverage = None
 
     def ask(
         self, cwd, prompt, contract, *, label, writable=False, reviewers=False, review_context=""
@@ -181,10 +182,15 @@ class FakeRuntime:
             return self.design
         if contract == WorkResult:
             assert writable
+            sources = list(self.store.sources(cwd).values())
             if label.startswith("implementation"):
-                (cwd / "value.py").write_text("def value(x):\n    return x if x > 0 else 0\n")
+                for source in sources[:-1]:
+                    (source / "value.py").write_text("def value(x):\n    return abs(x)\n")
+                (sources[-1] / "value.py").write_text(
+                    "def value(x):\n    return x if x > 0 else 0\n"
+                )
                 if self.outside_scope:
-                    (cwd / "extra.py").write_text("unexpected = True\n")
+                    (sources[-1] / "extra.py").write_text("unexpected = True\n")
             else:
                 assert "uc-review" not in prompt and "kernel-review" not in prompt
                 selected = load(self.store.artifacts / "selected.json")
@@ -194,15 +200,15 @@ class FakeRuntime:
                     for issue in selected
                     for finding in issue["findings"]
                 )
-                (cwd / "value.py").write_text("def value(x):\n    return abs(x)\n")
+                (sources[-1] / "value.py").write_text("def value(x):\n    return abs(x)\n")
                 if self.tamper_test:
-                    test = cwd / "tests/test_value.py"
+                    test = sources[-1] / "tests/test_value.py"
                     test.write_text(test.read_text().replace("value(-2) == 2", "value(-2) == 0"))
             return WorkResult(summary="Updated the result.", needs_design_change=False, reason="")
         if contract == Review:
             assert "Pinned base:" in review_context
             source = Path(re.search(r"(?m)^Source: (.+)$", prompt).group(1))
-            assert snapshot(source) == self.store.state.candidate
+            assert self.store.snapshot(source) == self.store.state.candidate
             assert not (self.store.artifacts / "uc-review.json").exists()
             assert not (self.store.artifacts / "kernel-review.json").exists()
             self.barrier.wait(timeout=10)
@@ -213,11 +219,13 @@ class FakeRuntime:
                 else ["api-reviewer", "shape-reviewer", "claim-checker"]
             )
             self.completed_reviewers[label] = set(names)
+            target = list(self.store.sources(source))[-1]
+            prefix = target + "/" if self.store.state.repositories else ""
             defect = Finding(
                 id="Blocker1" if uc else "B1",
                 kind="correctness",
                 severity="blocker",
-                file="value.py",
+                file=prefix + "value.py",
                 claim="Negative input returns zero.",
                 trigger="value(-2)",
                 effect="The caller gets 0 instead of 2.",
@@ -228,7 +236,7 @@ class FakeRuntime:
                 id="N1",
                 kind="style",
                 severity="nit",
-                file="value.py",
+                file=prefix + "value.py",
                 claim="Rename x.",
                 trigger="Read the argument.",
                 effect="The name is short.",
@@ -245,6 +253,9 @@ class FakeRuntime:
                 required_gates=names[2:],
                 completed_gates=names[2:],
                 gates_complete=True,
+                reviewed_repositories=self.review_coverage
+                if self.review_coverage is not None
+                else list(self.store.sources(source)),
             )
         if contract == Selection:
             if self.no_findings:
@@ -268,12 +279,17 @@ class FakeRuntime:
                 ]
             )
         if contract == Reproduction:
-            test = cwd / "tests/test_value.py"
+            source = list(self.store.sources(cwd).values())[-1]
+            test = source / "tests/test_value.py"
             test.write_text(
                 test.read_text() + "\n\ndef test_negative():\n    assert value(-2) == 2\n"
             )
             return Reproduction(
-                check_index=0,
+                check_index=next(
+                    index
+                    for index, check in enumerate(self.design.checks)
+                    if check.purpose == "test" and (cwd / check.cwd).resolve() == source.resolve()
+                ),
                 test_class="tests.test_value",
                 test_name="test_negative",
                 failure_text="unrelated failure" if self.wrong_failure else "assert 0 == 2",
@@ -307,3 +323,37 @@ class FakeRuntime:
 @pytest.fixture
 def runtime(store, design):
     return FakeRuntime(store, design)
+
+
+@pytest.fixture
+def workspace_design(design):
+    def qualify(names):
+        return design.model_copy(
+            update={
+                "files": [
+                    entry.model_copy(update={"path": name + "/" + entry.path})
+                    for name in names
+                    for entry in design.files
+                ],
+                "checks": [
+                    check.model_copy(
+                        update={
+                            "name": name + " " + check.name,
+                            "cwd": name if check.cwd == "." else name + "/" + check.cwd,
+                        }
+                    )
+                    for name in names
+                    for check in design.checks
+                ],
+            }
+        )
+
+    return qualify
+
+
+@pytest.fixture
+def workspace_runtime(workspace_design):
+    def create(store):
+        return FakeRuntime(store, workspace_design(list(store.sources())))
+
+    return create

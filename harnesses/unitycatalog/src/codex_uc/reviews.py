@@ -5,9 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .contracts import Review, Selection
-from .storage import checkout, digest, load, save, snapshot
+from .storage import digest, inside, load, save
 
-ADAPTER = """This is a local, review-only invocation for Unity Catalog.
+ADAPTER = """This is a local, review-only invocation for a Unity Catalog task.
 Use the supplied source snapshot, base tree, design, and task. Do not discover a PR.
 The controller supplies the local target and workspace. Use these instead of repository
 discovery, GitHub account selection, workspace allocation, or publication setup.
@@ -26,7 +26,11 @@ Read each reviewer's actual instructions. Start every dispatch prompt with exact
 REVIEWER: <the original reviewer name>
 Keep all reviewers, review passes, direction review, disproof, full finding blocks,
 code excerpts, fix examples, attribution, and the execution ledger required by the workflow.
-Adapt repository-specific checks to Unity Catalog. Do not merge this workflow with another.
+Adapt checks to each affected repository. Inspect every listed repository at its pinned base.
+The source root can contain sibling Git worktrees. Run git diff inside each repository
+against its own base. Do not run git diff in a container directory that is not a Git repo.
+Review the cross-repository interfaces as part of this same workflow. List every inspected
+repository name in reviewed_repositories. Do not merge this workflow with another.
 Use the affected UC, Delta, and Iceberg contracts for protocol checks where relevant.
 When instructions conflict, finish the detailed reviews for all direction verdicts.
 Normalize NEEDS DISCUSSION to CONTESTED. Prefer this repo's PR title convention.
@@ -83,7 +87,7 @@ def validate_review(name: str, report: Review, observed: set[str]) -> None:
 def review_pair(store, runtime) -> dict[str, Review]:
     state = store.state
     candidate = state.candidate
-    if not candidate or snapshot(Path(state.worktree)) != candidate:
+    if not candidate or store.snapshot(Path(state.worktree)) != candidate:
         raise ValueError("The source changed after its review snapshot was saved.")
 
     def review_one(name: str) -> Review:
@@ -91,37 +95,53 @@ def review_pair(store, runtime) -> dict[str, Review]:
         artifacts = store.artifacts / f"{name}-artifacts"
         artifacts.mkdir(exist_ok=True)
         if not source.exists():
-            checkout(Path(state.repo), source, state.base, candidate)
-        if snapshot(source) != candidate:
+            store.checkout(source, candidate)
+        if store.snapshot(source) != candidate:
             raise ValueError(f"The saved {name} source changed. Start a new design revision.")
-        policy = (
-            source / ".github/omnigent/reviewer/REVIEW.md"
-            if name == "uc"
-            else Path(state.kernel_skill)
+        policy = Path(state.kernel_skill)
+        if name == "uc":
+            policy = next(
+                (
+                    root / ".github/omnigent/reviewer/REVIEW.md"
+                    for root in store.sources(source).values()
+                    if (root / ".github/omnigent/reviewer/REVIEW.md").is_file()
+                ),
+                None,
+            )
+            if policy is None:
+                raise ValueError("The source snapshots do not contain the REVIEW.md workflow.")
+        coordinates = (
+            "REPO_NAME: workspace\nUse the listed base commit inside each repository.\n"
+            if state.repositories
+            else f"REPO_SLUG: unitycatalog/unitycatalog\nREPO_NAME: unitycatalog\n"
+            f"PARENT_REF: {state.base}\nLocal diff range: {state.base}\n"
         )
         prompt = (
             ADAPTER
             + f"\nRead the complete workflow at {policy}.\n"
             + f"For the skill, derive PLUGIN_ROOT from {policy.parent.parent.parent}.\n"
             + "Use the running Python interpreter if a helper names an unavailable Python version.\n"
-            + f"Source: {source}\nBase: {state.base}\nCandidate tree: {candidate}\n"
-            + f"REPO_SLUG: unitycatalog/unitycatalog\nREPO_NAME: unitycatalog\nPARENT_REF: {state.base}\n"
-            + f"WORKSPACE: {artifacts}\nLocal diff range: {state.base}\n"
+            + f"Source: {source}\nCandidate snapshot: {candidate}\n"
+            + store.source_context(source, candidate)
+            + "\n"
+            + coordinates
+            + f"WORKSPACE: {artifacts}\n"
             + f"Approved design: {store.root / 'design.json'}\n"
             + f"Task: {store.root / 'task.txt'}\n"
             + f"PR title and description: {store.artifacts / 'candidate-pr.json'}\n"
             + "UC review markers: <!-- CODEX_UC_REVIEW_START --> and <!-- CODEX_UC_REVIEW_END -->\n"
-            + "Inspect the diff with git diff <base> against this checkout, including its index.\n"
+            + "Inspect each diff with git diff <base> inside its listed repository, including its index.\n"
         )
         label = f"{name}-{store.approval_hash()}"
         binding = (
-            f"\nReview source: {source}\nPinned base: {state.base}\nCandidate tree: {candidate}\n"
+            f"\nReview source: {source}\nPinned base: use the repository baselines below.\nCandidate snapshot: {candidate}\n"
             f"Task: {store.root / 'task.txt'}\nPR metadata: {store.artifacts / 'candidate-pr.json'}\n"
             f"Approved design: {store.root / 'design.json'}\n"
             "Read only this workflow's source and artifacts. Keep source unchanged.\n"
             "For a direction review, first derive the approach from the task and base alone. "
             "Record it before reading the candidate, PR description, or approved design.\n"
         )
+        binding += "\n" + store.source_context(source, candidate) + "\n"
         report = runtime.ask(
             artifacts,
             prompt,
@@ -131,9 +151,18 @@ def review_pair(store, runtime) -> dict[str, Review]:
             reviewers=True,
             review_context=binding,
         )
-        if snapshot(source) != candidate:
+        if store.snapshot(source) != candidate:
             raise ValueError(f"The {name} reviewer changed its source snapshot.")
         validate_review(name, report, runtime.completed_reviewers.get(label, set()))
+        if state.repositories:
+            if set(report.reviewed_repositories) != set(store.sources(source)):
+                raise ValueError(f"The {name} review did not cover every selected repository.")
+            for finding in report.findings:
+                inside(source, finding.file)
+                if not Path(finding.file).parts or Path(finding.file).parts[0] not in store.sources(
+                    source
+                ):
+                    raise ValueError(f"The {name} finding needs its repository path prefix.")
         return report
 
     # Neither workflow receives the other's output. Save both only after they finish.
