@@ -9,6 +9,8 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 ---
 
+This fork adds [a Unity Catalog workflow](harnesses/unitycatalog/README.md) with design approval, independent reviews, test evidence, and plain-English replies.
+
 ## Quickstart
 
 ### Installing and running Codex CLI

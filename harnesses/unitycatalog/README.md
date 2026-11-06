@@ -1,0 +1,92 @@
+# Codex for Unity Catalog
+
+`codex-uc` runs Unity Catalog tasks through design, implementation, two independent
+reviews, and tests. It uses the Codex app server and its existing sandbox controls.
+All work stays local. The command produces a patch and a PR draft for you to review.
+
+## Run it
+
+Install [uv](https://docs.astral.sh/uv/) and Codex. Sign in to Codex as usual.
+Install the `kernel-review` skill separately. Its source is not included in this fork.
+
+From this checkout:
+
+```sh
+uv run --project harnesses/unitycatalog codex-uc start \
+  --repo /path/to/unitycatalog \
+  --kernel-review /path/to/kernel-review/SKILL.md \
+  "Describe the change you want"
+```
+
+The command fetches `origin/main` and creates an isolated worktree. Use `--base REF`
+to start from an existing local ref. Your original checkout can have unfinished work.
+The skill path is optional if the skill is installed in Codex's plugin cache.
+The command uses your configured model. `--model` selects a different one.
+
+Read the design. Discuss its architecture, behavior, interfaces, dependencies, and edge
+cases before approving it. The command prints a run path and a hash for the exact design.
+
+```sh
+uv run --project harnesses/unitycatalog codex-uc discuss RUN "Explain the upgrade behavior"
+uv run --project harnesses/unitycatalog codex-uc approve RUN --design DESIGN_HASH
+uv run --project harnesses/unitycatalog codex-uc run RUN
+```
+
+`show RUN` prints the design. `status RUN` shows the saved phase. Run state defaults to
+`~/.local/state/codex-uc`. `--state-dir` selects another location outside the repository.
+Keep run artifacts private; they can contain local paths and unpublished task details.
+
+## What the controller enforces
+
+1. Design runs with read-only source access. Implementation requires approval of the
+   current design hash. The design lists exact files, reasons, behavior, checks, and a
+   change budget. Scope changes stop the run for design discussion.
+2. The UC `REVIEW.md` workflow and the full `kernel-review` workflow run in separate
+   Codex sessions against the same frozen patch. Each workflow keeps its own reviewers
+   and disproof steps. The controller checks actual completed agent events. Review
+   source trees are outside the reviewers' writable directories.
+3. The selector defaults to leaving code unchanged. It groups duplicate findings and
+   keeps rejected decisions. It can shortlist at most three concrete defects. Naming
+   advice, optional refactors, speculative checks, and equivalent rewrites stay unchanged.
+4. A shortlisted claim needs a test-only patch against the unchanged candidate. The
+   controller runs an approved command in Codex's sandbox and records its actual exit code and fresh JUnit
+   XML. A named assertion must fail for the claimed reason. Setup failures, skipped tests,
+   stale reports, and compile failures do not qualify. A separate agent checks that the
+   test proves the approved contract and that a fix is necessary.
+5. The repair worker receives only selected, verified findings. It gets one repair batch,
+   limited to 80 changed lines. Reproduction tests stay unchanged. Those same tests and
+   all required checks must pass after the fix. There is no automatic review-and-nit loop.
+6. Replies are buffered before display. Plain-English instructions and a small prose
+   checker guide the wording. One clarity pass checks even short, abstract sentences.
+   At most one wording rewrite runs. It must preserve protected evidence and uncertainty.
+   A separate meaning check can reject the rewrite. These checks cannot prove that prose
+   is clear or equivalent. The original text remains available.
+7. The final PR draft follows the repository template and `[Component]` title convention.
+   It describes the actual diff and saved test results. The command creates no PR or review
+   comments. A completed model turn does not mark the patch ready.
+
+Canonical reports, original finding IDs, code excerpts, reviewer events, test patches,
+commands, logs, and test reports remain in the run directory. Writing checks never edit
+the canonical review reports. Run state uses an atomic file update and a process lock.
+
+Test commands must produce JUnit XML. Python's pytest and the JVM test runners used by
+Unity Catalog support this format. The report pattern is part of the approved design.
+Checks that need unavailable external services leave their claims unverified.
+The command sandbox can write to the source checkout and a private temporary directory.
+It cannot write to saved approvals, reports, or decisions. A check gets network access
+only when its approved design requests it. UC tests that start local servers need this.
+Keep build-tool caches in ignored `target` directories. Install the required JDK and
+other tools before a run. Long agent calls print a status message every 30 seconds.
+
+## Develop and test
+
+```sh
+uv run --project harnesses/unitycatalog --group dev pytest harnesses/unitycatalog/tests
+uv run --project harnesses/unitycatalog --group dev ruff check harnesses/unitycatalog
+uv run --project harnesses/unitycatalog --group dev ruff format --check harnesses/unitycatalog
+```
+
+Tests use temporary Git repositories, real local commands, and recorded agent results.
+They check workflow controls and evidence handling without making model calls.
+Set `CODEX_UC_LIVE_TESTS=1` to also check command sandbox enforcement with installed Codex.
+Real task trials are still needed to measure code quality and writing quality.
