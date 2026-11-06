@@ -9,9 +9,10 @@ from openai_codex import ApprovalMode, Sandbox
 from openai_codex.generated.v2_all import ThreadItem, TurnStatus
 
 from codex_uc import runtime as runtime_module
-from codex_uc.contracts import Check, Design, Presentation
+from codex_uc.contracts import Check, Design, MeaningCheck, Presentation, Rewrite
 from codex_uc.runtime import Runtime
-from codex_uc.storage import Store
+from codex_uc.storage import Store, git, load
+from codex_uc.writing import present
 
 
 @pytest.fixture
@@ -23,6 +24,8 @@ def server(monkeypatch):
         interrupt=False,
         items=[],
         schemas=[],
+        prompts=[],
+        responses=[],
         response='{"paragraphs":["The check finished."]}',
     )
 
@@ -32,13 +35,14 @@ def server(monkeypatch):
         def run(self, prompt, *, output_schema):
             state.requests += 1
             state.schemas.append(output_schema)
+            state.prompts.append(prompt)
             if state.interrupt:
                 state.interrupt = False
                 raise KeyboardInterrupt
             return SimpleNamespace(
                 id="turn",
                 status=TurnStatus.completed,
-                final_response=state.response,
+                final_response=state.responses.pop(0) if state.responses else state.response,
                 items=state.items,
             )
 
@@ -155,6 +159,32 @@ def test_a_changed_request_cannot_reuse_an_old_result(store, server):
     assert server.resumes == []
 
 
+def test_large_writing_requests_use_private_artifacts_and_reuse_completed_results(store, server):
+    original = "Utilize the result. " * 1200
+    revised = "Use the result. " * 1200
+    server.responses = [
+        Rewrite(paragraphs=[revised], facts_preserved=True).model_dump_json(),
+        MeaningCheck(
+            same_meaning=True, clearer_or_equal=True, reason="Same facts."
+        ).model_dump_json(),
+    ]
+    cwd = Path(store.state.worktree)
+    runtime = Runtime(store)
+
+    assert present(runtime, [original], cwd) == revised
+
+    assert server.requests == 2
+    requests = list((store.root / "agent-requests").glob("*.json"))
+    assert len(requests) == 2
+    assert all(str(path) in "\n".join(server.prompts) for path in requests)
+    assert all(len(prompt) < 16000 for prompt in server.prompts)
+    assert any(original in load(path)["request"] for path in requests)
+    assert any(revised in load(path)["request"] for path in requests)
+    assert git(cwd, "status", "--porcelain") == ""
+    assert present(Runtime(Store(store.root)), [original], cwd) == revised
+    assert server.requests == 2
+
+
 def test_workers_disable_inherited_remote_tools(store, tmp_path):
     executable = tmp_path / "codex"
     executable.write_text(
@@ -170,6 +200,26 @@ def test_workers_disable_inherited_remote_tools(store, tmp_path):
     assert 'mcp_servers={"other_tools"={enabled=false}}' in config.config_overrides
     assert "features.apps=false" in config.config_overrides
     assert "features.plugins=false" in config.config_overrides
+
+
+@pytest.mark.skipif(
+    os.environ.get("CODEX_UC_LIVE_TESTS") != "1", reason="Needs the installed Codex model service"
+)
+def test_live_agent_reads_a_large_request_from_its_private_artifact(store):
+    prompt = (
+        "Read this complete request before returning a result.\n"
+        + "Context: This test checks request transport.\n" * 600
+        + '\nReturn exactly {"paragraphs":["The complete request was read."]}.'
+    )
+
+    result = Runtime(store).ask(
+        Path(store.state.worktree), prompt, Presentation, label="live-large-request"
+    )
+
+    assert result.paragraphs == ["The complete request was read."]
+    paths = list((store.root / "agent-requests").glob("*.json"))
+    assert len(paths) == 1
+    assert load(paths[0])["request"] == prompt
 
 
 @pytest.mark.skipif(

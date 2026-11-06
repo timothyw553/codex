@@ -1,3 +1,5 @@
+import pytest
+
 from codex_uc.contracts import MeaningCheck, Rewrite
 from codex_uc.writing import alerts, present
 
@@ -64,3 +66,23 @@ def test_meaning_change_falls_back_without_another_rewrite(tmp_path):
     runtime = Rewriter("Accept the request when its schema is missing.", equivalent=False)
     assert present(runtime, [original], tmp_path) == original
     assert runtime.calls == 1
+
+
+@pytest.mark.parametrize("failed_contract", [Rewrite, MeaningCheck])
+def test_model_failure_uses_original_text_without_retry(tmp_path, monkeypatch, failed_contract):
+    original = "Utilize the result."
+    runtime = Rewriter("Use the result.")
+    ask = runtime.ask
+    calls = []
+
+    def fail(directory, prompt, contract, **options):
+        calls.append(contract)
+        if contract == failed_contract:
+            raise ValueError("The model request failed.")
+        return ask(directory, prompt, contract, **options)
+
+    monkeypatch.setattr(runtime, "ask", fail)
+
+    assert present(runtime, [original], tmp_path) == original
+    assert calls.count(Rewrite) == 1
+    assert calls.count(MeaningCheck) <= 1

@@ -106,11 +106,12 @@ Keep run artifacts private; they can contain local paths and unpublished task de
    limited to 80 changed lines. Reproduction tests stay unchanged. Those same tests and
    all required checks must pass after the fix. There is no automatic review-and-nit loop.
 6. Chat replies stream through the native terminal and use plain-English instructions.
-   Design reports and PR drafts are buffered before display. A small prose
-   checker guides the wording. One clarity pass checks even short, abstract sentences.
+   Design reports use the saved design text without another model call. PR drafts
+   get one optional clarity pass, including short, abstract sentences.
    At most one wording rewrite runs. It must preserve protected evidence and uncertainty.
    A separate meaning check can reject the rewrite. These checks cannot prove that prose
-   is clear or equivalent. The original text remains available.
+   is clear or equivalent. A failed writing check uses the original text and does not
+   invalidate a completed design. Large agent requests use private saved artifacts.
 7. Each final PR draft follows its repository template and `[Component]` title convention.
    It describes the actual diff and saved test results. The command creates no PR or review
    comments. A completed model turn does not mark the patch ready.

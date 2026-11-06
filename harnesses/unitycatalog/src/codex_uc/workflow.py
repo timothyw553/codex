@@ -56,7 +56,6 @@ class Workflow:
             )
             store.validate_design(design)
             save(previous, design.model_dump())
-            text = self.show_design()
         except (Exception, KeyboardInterrupt) as error:
             store.update(
                 phase="design_failed",
@@ -65,9 +64,9 @@ class Workflow:
             )
             raise
         store.update(phase="design", message="")
-        return text
+        return self.show_design()
 
-    def show_design(self) -> str:
+    def design_text(self) -> str:
         design = self.store.design()
         paragraphs = [design.summary, design.architecture]
         if self.store.state.repositories:
@@ -96,7 +95,10 @@ class Workflow:
                 for check in design.checks
             )
         )
-        text = present(self.runtime, paragraphs, Path(self.store.state.worktree))
+        return "\n\n".join(paragraphs)
+
+    def show_design(self) -> str:
+        text = self.design_text()
         (self.store.root / "design.md").write_text(text + "\n", encoding="utf-8")
         return text
 

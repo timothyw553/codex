@@ -58,11 +58,9 @@ TOOLS = [
 
 
 def design_report(root: Path, expected_hash: str) -> str | None:
-    path = root / "chat-design.json"
-    if path.exists():
-        report = load(path)
-        if hmac.compare_digest(report["design_hash"], expected_hash):
-            return report["text"]
+    store = Store(root)
+    if store.design_ready and hmac.compare_digest(store.approval_hash(), expected_hash):
+        return Workflow(store, None).design_text()
     return None
 
 
@@ -155,10 +153,6 @@ def work(root: Path, action: str, message: str = "", expected_hash: str = "") ->
                 if request.exists():
                     session["repositories"] = load(request).get("repositories", [])
                     save(root / "chat.json", session)
-            save(
-                store.root / "chat-design.json",
-                {"design_hash": store.approval_hash(), "text": text},
-            )
             return text
         if action != "implement":
             raise ValueError("Unknown chat worker action.")

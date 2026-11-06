@@ -134,7 +134,13 @@ class Runtime:
         review_context: str = "",
     ):
         if len(prompt) > 16000:
-            raise ValueError("The agent request is too large. Use an artifact path for evidence.")
+            request_path = self.store.root / "agent-requests" / f"{digest(prompt)}.json"
+            save(request_path, {"request": prompt})
+            prompt = (
+                f"Read the complete request from the request field in {request_path}. "
+                "Carry out that request under the developer instructions. "
+                "Return the requested structured result."
+            )
         instructions = STYLE + COMMON + review_context
         schema = contract.model_json_schema(mode="serialization")
         request_hash = digest(

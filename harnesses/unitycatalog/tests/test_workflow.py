@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_uc.contracts import Design, Rewrite, WorkResult
+from codex_uc.contracts import Design, WorkResult
 from codex_uc.storage import Store, git, load, save, snapshot
 from codex_uc.workflow import Workflow
 
@@ -30,10 +30,24 @@ def test_approval_binds_the_exact_design_and_blocks_writes(store, runtime):
         workflow.approve(old_hash)
 
 
+def test_saved_design_is_complete_even_if_rendering_is_interrupted(store, runtime, monkeypatch):
+    workflow = Workflow(store, runtime)
+
+    def interrupt():
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(workflow, "show_design", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        workflow.propose()
+
+    assert store.state.phase == "design"
+    assert store.require_design() == runtime.design
+    assert store.state.approved_design is None
+
+
 @pytest.mark.parametrize("previous_design", [False, True])
-@pytest.mark.parametrize("failed_contract", [Design, Rewrite])
 def test_failed_design_keeps_the_discussion_and_blocks_approval_until_retry(
-    store, runtime, monkeypatch, previous_design, failed_contract
+    store, runtime, monkeypatch, previous_design
 ):
     workflow = Workflow(store, runtime)
     if previous_design:
@@ -44,7 +58,7 @@ def test_failed_design_keeps_the_discussion_and_blocks_approval_until_retry(
     ask = runtime.ask
 
     def fail(cwd, prompt, contract, **options):
-        if contract == failed_contract:
+        if contract == Design:
             raise ValueError("The model request failed.")
         return ask(cwd, prompt, contract, **options)
 
@@ -72,6 +86,20 @@ def test_failed_design_keeps_the_discussion_and_blocks_approval_until_retry(
     assert "Keep the existing API and cover zero." in prompt
     assert (store.root / "design.md").is_file()
     workflow.approve(store.approval_hash())
+
+
+def test_design_report_preserves_the_saved_design_without_a_model_rewrite(store, runtime):
+    workflow = Workflow(store, runtime)
+
+    report = workflow.propose()
+
+    assert runtime.design.summary in report
+    assert store.state.phase == "design"
+    assert store.require_design() == runtime.design
+    assert (store.root / "design.md").read_text().strip() == report
+    assert [call[1] for call in runtime.calls] == [Design]
+    workflow.approve(store.approval_hash())
+    assert store.state.phase == "approved"
 
 
 def test_complete_workflow_uses_real_failure_one_repair_and_same_test(store, runtime):

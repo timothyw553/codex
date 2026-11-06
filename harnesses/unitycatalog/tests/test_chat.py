@@ -36,12 +36,6 @@ def session(store, tmp_path):
 @pytest.fixture
 def chat_design(store, design):
     save(store.root / "design.json", design.model_dump())
-    text = design.model_dump_json(indent=2)
-    (store.root / "design.md").write_text(text)
-    save(
-        store.root / "chat-design.json",
-        {"design_hash": store.approval_hash(), "text": text},
-    )
     return design
 
 
@@ -511,11 +505,17 @@ def test_code_changes_require_confirmation_of_the_current_design(
     assert store.state.approved_design is None
 
 
-def test_a_stale_design_report_cannot_be_approved(session, store, chat_design):
+def test_confirmation_uses_the_current_design_without_a_cached_report(session, store, chat_design):
+    previous_hash = store.approval_hash()
+    save(
+        store.root / "chat-design.json",
+        {"design_hash": previous_hash, "text": "Stale report"},
+    )
     save(
         store.root / "design.json",
         chat_design.model_copy(update={"architecture": "The design has changed."}).model_dump(),
     )
+    calls = []
     state = load(session / "chat.json")
     save(
         session / "chat.json",
@@ -526,15 +526,23 @@ def test_a_stale_design_report_cannot_be_approved(session, store, chat_design):
         server = chat_server.ChatServer(session)
 
         async def confirm(message):
-            pytest.fail("The old report must not be offered for approval.")
+            assert "The design has changed." in message
+            assert "Stale report" not in message
+            return True
+
+        async def worker(action, message="", expected_hash="", progress=None):
+            calls.append(expected_hash)
+            return "done"
 
         server.confirm = confirm
-        with pytest.raises(ValueError, match="design report.*stale"):
-            await server.call_tool("implement_design", {})
+        server.run_worker = worker
+        await server.call_tool("implement_design", {})
         report = json.loads(await server.call_tool("read_workflow", {}))
-        assert "design_text" not in report
+        assert "The design has changed." in report["design_text"]
 
     asyncio.run(exercise())
+    assert chat_server.design_report(store.root, previous_hash) is None
+    assert calls == [store.approval_hash()]
     assert store.state.approved_design is None
 
 
