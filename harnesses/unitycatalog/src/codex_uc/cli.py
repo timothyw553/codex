@@ -65,12 +65,12 @@ def start(args) -> Store:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     cli = argparse.ArgumentParser(
         description="Build focused Unity Catalog changes with Codex.",
-        epilog='From a Git repository, run: codex-uc "Describe the change". '
+        epilog='Run codex-uc to enter a task, or codex-uc "Describe the change". '
         "Use --repo PATH from another directory.",
     )
     commands = cli.add_subparsers(dest="command", required=True)
     initial = commands.add_parser("start", help="Investigate a task and propose its design.")
-    initial.add_argument("task")
+    initial.add_argument("task", nargs="?", help="Describe the change. Prompts when omitted.")
     initial.add_argument(
         "--repo", type=Path, default=Path.cwd(), help="Default: the current Git repository."
     )
@@ -101,7 +101,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         command = commands.add_parser(name, help=help_text)
         command.add_argument("run", type=Path)
     argv = sys.argv[1:] if argv is None else argv
-    if argv and argv[0] not in commands.choices and argv[0] not in {"-h", "--help"}:
+    if not argv or (argv[0] not in commands.choices and argv[0] not in {"-h", "--help"}):
         argv = ["start", *argv]
     return cli.parse_args(argv)
 
@@ -110,6 +110,9 @@ def main() -> int:
     args = parse_args()
     store = None
     try:
+        if args.command == "start":
+            while not args.task or not args.task.strip():
+                args.task = input("What would you like to work on? ")
         store = start(args) if args.command == "start" else Store(args.run)
         with store.locked():
             workflow = Workflow(store, Runtime(store), lambda message: print(message, flush=True))
@@ -138,8 +141,12 @@ def main() -> int:
                 )
         return 0
     except KeyboardInterrupt:
-        print("Stopped. The run state and worktrees are saved.", file=sys.stderr)
+        message = "Stopped. The run state and worktrees are saved." if store else "Stopped."
+        print(message, file=sys.stderr)
         return 130
+    except EOFError:
+        print('No task entered. Use codex-uc "Describe the change".', file=sys.stderr)
+        return 1
     except Exception as error:
         print(f"codex-uc: {error}", file=sys.stderr)
         if store:

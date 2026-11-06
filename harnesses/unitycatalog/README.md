@@ -21,9 +21,11 @@ directory inside it:
 
 ```sh
 cd /path/to/unitycatalog
-codex-uc "Describe the change you want"
+codex-uc
 ```
 
+The command asks what you want to work on. You can also pass the task directly:
+`codex-uc "Describe the change you want"`.
 The command uses the current Git repository. `start` is optional. Use
 `codex-uc --repo /path/to/unitycatalog "Describe the change"` from another directory.
 The command fetches `origin/main` and creates an isolated worktree. Use `--base REF`
