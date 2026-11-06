@@ -24,16 +24,30 @@ class Workflow:
         previous = store.root / "design.json"
         if previous.exists():
             save(store.root / "designs" / f"{store.approval_hash()}.json", load(previous))
-        store.update(approved_design=None, phase="design", candidate=None)
-        design = self.runtime.ask(
-            Path(store.state.worktree),
-            design_prompt(store, discussion),
-            Design,
-            label="design-" + str(len(list((store.root / "agents").glob("design-*")))),
-        )
-        validate_design(Path(store.state.worktree), design)
-        save(previous, design.model_dump())
-        return self.show_design()
+        store.update(approved_design=None, phase="design_generating", candidate=None, message="")
+        try:
+            request = store.root / "design-request.json"
+            if not discussion and request.exists():
+                discussion = load(request)["discussion"]
+            save(request, {"discussion": discussion})
+            design = self.runtime.ask(
+                Path(store.state.worktree),
+                design_prompt(store, discussion),
+                Design,
+                label="design-" + str(len(list((store.root / "agents").glob("design-*")))),
+            )
+            validate_design(Path(store.state.worktree), design)
+            save(previous, design.model_dump())
+            text = self.show_design()
+        except (Exception, KeyboardInterrupt) as error:
+            store.update(
+                phase="design_failed",
+                message="The design request did not finish. "
+                + (str(error) or type(error).__name__),
+            )
+            raise
+        store.update(phase="design", message="")
+        return text
 
     def show_design(self) -> str:
         design = self.store.design()
@@ -65,13 +79,14 @@ class Workflow:
 
     def approve(self, expected_hash: str) -> None:
         store = self.store
+        design = store.require_design()
         if store.state.phase != "design":
             raise ValueError("Only a design awaiting approval can be approved.")
         if not hmac.compare_digest(expected_hash, store.approval_hash()):
             raise ValueError("The design changed. Read it again before approving it.")
-        if store.design().questions:
+        if design.questions:
             raise ValueError("Resolve the design questions before approving it.")
-        validate_design(Path(store.state.worktree), store.design())
+        validate_design(Path(store.state.worktree), design)
         store.update(approved_design=expected_hash, phase="approved", repair_batches=0, message="")
 
     def run(self) -> str:

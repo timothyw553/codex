@@ -33,7 +33,7 @@ TOOLS = [
     },
     {
         "name": "propose_design",
-        "description": "Investigate or revise the design for the agreed problem. Include decisions from the chat. Requires problem confirmation. Source access is read-only.",
+        "description": "Investigate or revise the design for the agreed problem. Include decisions from the chat. An empty discussion reuses the saved discussion. Requires problem confirmation. Source access is read-only.",
         "inputSchema": {
             "type": "object",
             "properties": {"discussion": {"type": "string", "default": ""}},
@@ -72,7 +72,7 @@ def describe(root: Path) -> str:
         store = Store(Path(session["run"]))
         result.update(store.state.model_dump())
         result["run"] = str(store.root)
-        if (store.root / "design.json").exists():
+        if store.design_ready:
             result["design"] = store.design().model_dump()
             result["design_hash"] = store.approval_hash()
             text = design_report(store.root, result["design_hash"])
@@ -130,6 +130,7 @@ def work(root: Path, action: str, message: str = "", expected_hash: str = "") ->
             return text
         if action != "implement":
             raise ValueError("Unknown chat worker action.")
+        store.require_design()
         if not hmac.compare_digest(expected_hash, store.approval_hash()):
             raise ValueError("The design changed. Discuss it again before approving it.")
         if store.state.approved_design != expected_hash:
@@ -272,7 +273,7 @@ class ChatServer:
         if not session["run"]:
             raise ValueError("Discuss a design before implementation.")
         store = Store(Path(session["run"]))
-        design = store.design()
+        design = store.require_design()
         expected = store.approval_hash()
         if design.questions:
             raise ValueError("Resolve the design questions in chat before implementation.")

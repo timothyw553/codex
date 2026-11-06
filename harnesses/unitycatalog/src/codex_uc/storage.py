@@ -147,6 +147,21 @@ class Store:
     def design(self) -> Design:
         return Design.model_validate(load(self.root / "design.json"))
 
+    @property
+    def design_ready(self) -> bool:
+        return (
+            self.state.phase not in {"design_generating", "design_failed"}
+            and (self.root / "design.json").is_file()
+        )
+
+    def require_design(self) -> Design:
+        if not self.design_ready:
+            raise ValueError(
+                "No completed design is ready. Request the design again. "
+                "The saved discussion will be reused."
+            )
+        return self.design()
+
     def approval_hash(self) -> str:
         state = self.state
         return digest(
@@ -154,9 +169,9 @@ class Store:
         )
 
     def require_approval(self) -> Design:
+        design = self.require_design()
         if self.state.approved_design != self.approval_hash():
             raise ValueError("Review and approve the current design before running implementation.")
-        design = self.design()
         if design.questions:
             raise ValueError("Resolve the design questions before implementation.")
         validate_design(Path(self.state.worktree), design)

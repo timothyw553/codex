@@ -383,6 +383,40 @@ def test_a_stale_design_report_cannot_be_approved(session, store, chat_design):
     assert store.state.approved_design is None
 
 
+@pytest.mark.parametrize(
+    "phase,missing_design",
+    [("design", True), ("design_generating", False), ("design_failed", False)],
+)
+def test_incomplete_design_cannot_reuse_an_old_report_or_start_implementation(
+    session, store, chat_design, phase, missing_design
+):
+    if missing_design:
+        (store.root / "design.json").unlink()
+    store.update(phase=phase)
+    state = load(session / "chat.json")
+    save(
+        session / "chat.json",
+        {**state, "problem": {"problem": store.state.task}, "run": str(store.root)},
+    )
+
+    async def exercise():
+        server = chat_server.ChatServer(session)
+
+        async def unexpected(*args, **kwargs):
+            pytest.fail("An incomplete design must not reach confirmation or implementation.")
+
+        server.confirm = unexpected
+        server.run_worker = unexpected
+        with pytest.raises(ValueError, match="No completed design"):
+            await server.call_tool("implement_design", {})
+        report = json.loads(await server.call_tool("read_workflow", {}))
+        assert "design" not in report
+        assert "design_text" not in report
+
+    asyncio.run(exercise())
+    assert store.state.approved_design is None
+
+
 def test_worker_rejects_a_design_changed_after_confirmation(
     session, store, runtime, design, monkeypatch
 ):

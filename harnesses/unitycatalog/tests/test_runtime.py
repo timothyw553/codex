@@ -9,27 +9,36 @@ from openai_codex import ApprovalMode, Sandbox
 from openai_codex.generated.v2_all import ThreadItem, TurnStatus
 
 from codex_uc import runtime as runtime_module
-from codex_uc.contracts import Check, Presentation
+from codex_uc.contracts import Check, Design, Presentation
 from codex_uc.runtime import Runtime
 from codex_uc.storage import Store
 
 
 @pytest.fixture
 def server(monkeypatch):
-    state = SimpleNamespace(starts=[], resumes=[], requests=0, interrupt=False, items=[])
+    state = SimpleNamespace(
+        starts=[],
+        resumes=[],
+        requests=0,
+        interrupt=False,
+        items=[],
+        schemas=[],
+        response='{"paragraphs":["The check finished."]}',
+    )
 
     class Thread:
         id = "saved-thread"
 
         def run(self, prompt, *, output_schema):
             state.requests += 1
+            state.schemas.append(output_schema)
             if state.interrupt:
                 state.interrupt = False
                 raise KeyboardInterrupt
             return SimpleNamespace(
                 id="turn",
                 status=TurnStatus.completed,
-                final_response='{"paragraphs":["The check finished."]}',
+                final_response=state.response,
                 items=state.items,
             )
 
@@ -59,6 +68,29 @@ def server(monkeypatch):
     monkeypatch.setattr(runtime_module, "Codex", Client)
     monkeypatch.setattr(runtime_module, "local_tool_config", lambda *args: (), raising=False)
     return state
+
+
+def test_submitted_design_schema_requires_every_property_including_defaults(store, server, design):
+    server.response = design.model_dump_json()
+
+    result = Runtime(store).ask(store.root, "Return the design.", Design, label="design")
+
+    def check_objects(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                assert node["additionalProperties"] is False
+                assert set(node.get("required", [])) == set(node["properties"])
+            for value in node.values():
+                check_objects(value)
+        elif isinstance(node, list):
+            for value in node:
+                check_objects(value)
+
+    check_objects(server.schemas[0])
+    assert result == design
+    saved = design.model_dump()
+    del saved["checks"][0]["network_access"]
+    assert Design.model_validate(saved).checks[0].network_access is False
 
 
 def test_read_only_agent_and_completed_result_survive_controller_restart(store, server):
@@ -138,6 +170,19 @@ def test_workers_disable_inherited_remote_tools(store, tmp_path):
     assert 'mcp_servers={"other_tools"={enabled=false}}' in config.config_overrides
     assert "features.apps=false" in config.config_overrides
     assert "features.plugins=false" in config.config_overrides
+
+
+@pytest.mark.skipif(
+    os.environ.get("CODEX_UC_LIVE_TESTS") != "1", reason="Needs the installed Codex model service"
+)
+def test_live_model_accepts_the_design_schema(store, design):
+    result = Runtime(store).ask(
+        Path(store.state.worktree),
+        "Return this design unchanged. Do not use tools.\n" + design.model_dump_json(),
+        Design,
+        label="live-design-schema",
+    )
+    assert result == design
 
 
 @pytest.mark.skipif(

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_uc.contracts import WorkResult
+from codex_uc.contracts import Design, Rewrite, WorkResult
 from codex_uc.storage import Store, git, load, save, snapshot
 from codex_uc.workflow import Workflow
 
@@ -28,6 +28,50 @@ def test_approval_binds_the_exact_design_and_blocks_writes(store, runtime):
     save(store.root / "design.json", data)
     with pytest.raises(ValueError, match="changed"):
         workflow.approve(old_hash)
+
+
+@pytest.mark.parametrize("previous_design", [False, True])
+@pytest.mark.parametrize("failed_contract", [Design, Rewrite])
+def test_failed_design_keeps_the_discussion_and_blocks_approval_until_retry(
+    store, runtime, monkeypatch, previous_design, failed_contract
+):
+    workflow = Workflow(store, runtime)
+    if previous_design:
+        workflow.propose()
+        old_hash = store.approval_hash()
+        workflow.approve(old_hash)
+    original = snapshot(Path(store.state.worktree))
+    ask = runtime.ask
+
+    def fail(cwd, prompt, contract, **options):
+        if contract == failed_contract:
+            raise ValueError("The model request failed.")
+        return ask(cwd, prompt, contract, **options)
+
+    monkeypatch.setattr(runtime, "ask", fail)
+    with pytest.raises(ValueError, match="model request failed"):
+        workflow.propose("Keep the existing API and cover zero.")
+
+    assert store.state.phase == "design_failed"
+    assert "model request failed" in store.state.message
+    assert store.state.approved_design is None
+    with pytest.raises(ValueError, match="design"):
+        workflow.approve("unapproved")
+    with pytest.raises(ValueError, match="design"):
+        workflow.run()
+    assert not any(call[1] == WorkResult for call in runtime.calls)
+    assert snapshot(Path(store.state.worktree)) == original
+    if previous_design:
+        assert (store.root / "designs" / f"{old_hash}.json").exists()
+
+    monkeypatch.setattr(runtime, "ask", ask)
+    workflow.propose()
+    assert store.state.phase == "design"
+    assert store.state.message == ""
+    prompt = [call[2] for call in runtime.calls if call[1] == Design][-1]
+    assert "Keep the existing API and cover zero." in prompt
+    assert (store.root / "design.md").is_file()
+    workflow.approve(store.approval_hash())
 
 
 def test_complete_workflow_uses_real_failure_one_repair_and_same_test(store, runtime):

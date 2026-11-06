@@ -37,6 +37,9 @@ criteria, and constraints. Design work starts only after you confirm that agreem
 The second agreement confirms the exact saved design before source changes. Both appear
 inside the terminal chat. The controller handles run paths and design hashes.
 
+If design generation fails, ask the chat to try again. The controller keeps your last
+design discussion. A failed or unfinished design cannot be approved or implemented.
+
 The command uses the current Git repository. Outside Git, it uses `~/unitycatalog`.
 Use `--repo /path/to/unitycatalog` to choose another checkout. The startup message shows
 the selected repository. When design work starts, the controller fetches `origin/main` and
@@ -44,6 +47,7 @@ creates an isolated worktree. Use `--base REF` to select an existing local ref. 
 original checkout can have unfinished work. The chat reads the original checkout during
 problem discussion and uses the controller's worktree for the task. Source edits and
 test evidence remain in that worktree and its saved artifacts.
+Each run manages one repository.
 
 The controller finds `kernel-review` in Codex's plugin cache. Use
 `--kernel-review /path/to/kernel-review/SKILL.md` to select it explicitly.

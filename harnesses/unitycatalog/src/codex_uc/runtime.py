@@ -136,13 +136,14 @@ class Runtime:
         if len(prompt) > 16000:
             raise ValueError("The agent request is too large. Use an artifact path for evidence.")
         instructions = STYLE + COMMON + review_context
+        schema = contract.model_json_schema(mode="serialization")
         request_hash = digest(
             {
                 "cwd": str(cwd),
                 "prompt": prompt,
                 "instructions": instructions,
                 "model": self.store.state.model,
-                "schema": contract.model_json_schema(),
+                "schema": schema,
                 "writable": writable,
                 "reviewers": reviewers,
             }
@@ -183,7 +184,7 @@ class Runtime:
                 thread = codex.thread_start(**options)
                 save(thread_path, {"thread": thread.id, "request_hash": request_hash})
             with self.heartbeat(label):
-                result = thread.run(prompt, output_schema=contract.model_json_schema())
+                result = thread.run(prompt, output_schema=schema)
             items = result.items
             if reviewers:
                 items = [
