@@ -56,6 +56,7 @@ def server(monkeypatch):
             return Thread()
 
     monkeypatch.setattr(runtime_module, "Codex", Client)
+    monkeypatch.setattr(runtime_module, "local_tool_config", lambda *args: (), raising=False)
     return state
 
 

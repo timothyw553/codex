@@ -1,7 +1,9 @@
 # Codex for Unity Catalog
 
-`codex-uc` runs Unity Catalog tasks through design, implementation, two independent
-reviews, and tests. It uses the Codex app server and its existing sandbox controls.
+`codex-uc` opens the normal Codex terminal chat with a Unity Catalog workflow attached.
+Start with a question or an unclear problem. Discuss it until you agree on what needs
+to change. Then discuss the design before implementation, two independent reviews, and tests.
+It uses the Codex app server and its existing sandbox controls.
 All work stays local. The command produces a patch and a PR draft for you to review.
 
 ## Run it
@@ -13,7 +15,7 @@ From this fork's checkout:
 
 ```sh
 uv run --project harnesses/unitycatalog codex-uc \
-  --repo /path/to/unitycatalog "Describe the change you want"
+  --repo /path/to/unitycatalog
 ```
 
 If `codex-uc` is on your PATH, run it from your Unity Catalog checkout or any
@@ -24,20 +26,34 @@ cd /path/to/unitycatalog
 codex-uc
 ```
 
-The command asks what you want to work on. You can also pass the task directly:
-`codex-uc "Describe the change you want"`.
-The command uses the current Git repository. `start` is optional. Use
-`codex-uc --repo /path/to/unitycatalog "Describe the change"` from another directory.
-The command fetches `origin/main` and creates an isolated worktree. Use `--base REF`
-to start from an existing local ref. Your original checkout can have unfinished work.
-The command finds `kernel-review` in Codex's plugin cache. Use
+Talk to it as you would talk to Codex. For example, start with "Listing tables feels
+slow, but I do not know why." Ask questions, give examples, and correct assumptions.
+You can also supply an opening message: `codex-uc "Help me understand table listing"`.
+The conversation stays open after each reply. `codex-uc resume` continues your latest
+chat in this repository. A saved chat path can select a specific chat.
+
+The chat starts with read-only source access. Opening it requires no task, model call,
+worktree, or installed review skill. The first agreement records the problem, success
+criteria, and constraints. Design work starts only after you confirm that agreement.
+The second agreement confirms the exact saved design before source changes. Both appear
+inside the terminal chat. The controller handles run paths and design hashes.
+
+The command uses the current Git repository. Use `--repo /path/to/unitycatalog` from
+another directory. When design work starts, the controller fetches `origin/main` and
+creates an isolated worktree. Use `--base REF` to select an existing local ref. Your
+original checkout can have unfinished work. The chat reads the original checkout during
+problem discussion and uses the controller's worktree for the task. Source edits and
+test evidence remain in that worktree and its saved artifacts.
+
+The controller finds `kernel-review` in Codex's plugin cache. Use
 `--kernel-review /path/to/kernel-review/SKILL.md` to select it explicitly.
 The command uses your configured model. `--model` selects a different one.
 
-Read the design. Discuss its architecture, behavior, interfaces, dependencies, and edge
-cases before approving it. The command prints a run path and a hash for the exact design.
+For scripts, the explicit `start` command retains the original one-step interface.
+It prints a design and exits. The saved-run commands also remain available:
 
 ```sh
+codex-uc start "Describe a known task"
 codex-uc discuss RUN "Explain the upgrade behavior"
 codex-uc approve RUN --design DESIGN_HASH
 codex-uc run RUN
@@ -49,8 +65,10 @@ Keep run artifacts private; they can contain local paths and unpublished task de
 
 ## What the controller enforces
 
-1. Design runs with read-only source access. Implementation requires approval of the
-   current design hash. The design lists exact files, reasons, behavior, checks, and a
+1. The chat can discuss a problem without creating a task. The controller requires
+   problem confirmation before design. Design runs with read-only source access.
+   Implementation requires approval of the current design hash.
+   The design lists exact files, reasons, behavior, checks, and a
    change budget. Scope changes stop the run for design discussion.
 2. The UC `REVIEW.md` workflow and the full `kernel-review` workflow run in separate
    Codex sessions against the same frozen patch. Each workflow keeps its own reviewers
@@ -67,8 +85,9 @@ Keep run artifacts private; they can contain local paths and unpublished task de
 5. The repair worker receives only selected, verified findings. It gets one repair batch,
    limited to 80 changed lines. Reproduction tests stay unchanged. Those same tests and
    all required checks must pass after the fix. There is no automatic review-and-nit loop.
-6. Replies are buffered before display. Plain-English instructions and a small prose
-   checker guide the wording. One clarity pass checks even short, abstract sentences.
+6. Chat replies stream through the native terminal and use plain-English instructions.
+   Design reports and PR drafts are buffered before display. A small prose
+   checker guides the wording. One clarity pass checks even short, abstract sentences.
    At most one wording rewrite runs. It must preserve protected evidence and uncertainty.
    A separate meaning check can reject the rewrite. These checks cannot prove that prose
    is clear or equivalent. The original text remains available.

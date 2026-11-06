@@ -1,7 +1,9 @@
 """Use Codex's app server and retain complete results before presenting text."""
 
+import json
 import re
 import shutil
+import subprocess
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -37,6 +39,26 @@ Return the requested structured result. A completed turn does not mean a PR is r
 """
 
 
+def local_tool_config(executable: str | None, cwd: Path) -> tuple[str, ...]:
+    if not executable:
+        raise ValueError("Install Codex before starting this workflow.")
+    result = subprocess.run(
+        [executable, "mcp", "list", "--json"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    # Empty tables merge with inherited settings. Disable each inherited server explicitly.
+    servers = json.loads(result.stdout)
+    disabled = ",".join(f"{json.dumps(server['name'])}={{enabled=false}}" for server in servers)
+    return (
+        "mcp_servers={" + disabled + "}",
+        "features.apps=false",
+        "features.plugins=false",
+    )
+
+
 class Runtime:
     def __init__(self, store):
         self.store = store
@@ -66,12 +88,13 @@ class Runtime:
             thread.join()
 
     def config(self, cwd: Path) -> CodexConfig:
+        executable = self.store.state.codex_bin or shutil.which("codex")
         return CodexConfig(
-            codex_bin=self.store.state.codex_bin or shutil.which("codex"),
+            codex_bin=executable,
             cwd=str(cwd),
             client_name="codex_uc",
             client_title="Codex for Unity Catalog",
-            config_overrides=("mcp_servers={}", "features.apps=false", 'web_search="disabled"'),
+            config_overrides=(*local_tool_config(executable, cwd), 'web_search="disabled"'),
         )
 
     def execute(self, worktree: Path, check: Check) -> CommandExecResponse:

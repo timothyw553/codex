@@ -7,6 +7,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .chat import launch_chat, resume_chat
 from .contracts import RunState
 from .runtime import Runtime
 from .storage import Store, checkout, git, save
@@ -65,24 +66,37 @@ def start(args) -> Store:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     cli = argparse.ArgumentParser(
         description="Build focused Unity Catalog changes with Codex.",
-        epilog='Run codex-uc to enter a task, or codex-uc "Describe the change". '
+        epilog='Run codex-uc to chat, or codex-uc "Describe the change". '
         "Use --repo PATH from another directory.",
     )
     commands = cli.add_subparsers(dest="command", required=True)
-    initial = commands.add_parser("start", help="Investigate a task and propose its design.")
-    initial.add_argument("task", nargs="?", help="Describe the change. Prompts when omitted.")
-    initial.add_argument(
-        "--repo", type=Path, default=Path.cwd(), help="Default: the current Git repository."
+    state_dir = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "codex-uc"
+    for name, help_text in (
+        ("chat", "Open the normal Codex chat. Start by discussing the problem."),
+        ("start", "Investigate a known task once and print its design."),
+    ):
+        initial = commands.add_parser(name, help=help_text)
+        initial.add_argument("task", nargs="?", help="Optional opening message.")
+        initial.add_argument(
+            "--repo", type=Path, default=Path.cwd(), help="Default: the current Git repository."
+        )
+        initial.add_argument(
+            "--base", help="Use this existing ref instead of fetching origin/main."
+        )
+        initial.add_argument(
+            "--kernel-review", help="Path to the installed kernel-review SKILL.md."
+        )
+        initial.add_argument(
+            "--model", help="Use this model instead of the user's configured default."
+        )
+        initial.add_argument("--codex-bin", help="Use this Codex executable.")
+        initial.add_argument("--state-dir", type=Path, default=state_dir)
+    continuation = commands.add_parser(
+        "resume", help="Continue the latest chat in this repository."
     )
-    initial.add_argument("--base", help="Use this existing ref instead of fetching origin/main.")
-    initial.add_argument("--kernel-review", help="Path to the installed kernel-review SKILL.md.")
-    initial.add_argument("--model", help="Use this model instead of the user's configured default.")
-    initial.add_argument("--codex-bin", help="Use this Codex executable.")
-    initial.add_argument(
-        "--state-dir",
-        type=Path,
-        default=Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "codex-uc",
-    )
+    continuation.add_argument("run", nargs="?", type=Path)
+    continuation.add_argument("--repo", type=Path, default=Path.cwd())
+    continuation.add_argument("--state-dir", type=Path, default=state_dir)
     discussion = commands.add_parser(
         "discuss", help="Discuss or revise a design before implementation."
     )
@@ -102,7 +116,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         command.add_argument("run", type=Path)
     argv = sys.argv[1:] if argv is None else argv
     if not argv or (argv[0] not in commands.choices and argv[0] not in {"-h", "--help"}):
-        argv = ["start", *argv]
+        argv = ["chat", *argv]
     return cli.parse_args(argv)
 
 
@@ -110,6 +124,10 @@ def main() -> int:
     args = parse_args()
     store = None
     try:
+        if args.command == "chat":
+            return launch_chat(args)
+        if args.command == "resume":
+            return resume_chat(args)
         if args.command == "start":
             while not args.task or not args.task.strip():
                 args.task = input("What would you like to work on? ")

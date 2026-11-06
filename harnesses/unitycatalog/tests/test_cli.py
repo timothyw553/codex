@@ -9,11 +9,10 @@ from codex_uc.contracts import WorkResult
 from codex_uc.storage import Store, git
 
 
-@pytest.mark.parametrize("explicit_start", [False, True])
 @pytest.mark.parametrize("explicit_repo", [False, True])
 @pytest.mark.parametrize("task_in_argv", [False, True])
 def test_start_uses_the_current_repository_or_an_explicit_path(
-    store, runtime, tmp_path, monkeypatch, capsys, explicit_start, explicit_repo, task_in_argv
+    store, runtime, tmp_path, monkeypatch, capsys, explicit_repo, task_in_argv
 ):
     repo = Path(store.state.repo)
     monkeypatch.chdir(tmp_path if explicit_repo else repo / "tests")
@@ -31,8 +30,7 @@ def test_start_uses_the_current_repository_or_an_explicit_path(
         monkeypatch.setattr(sys, "stdin", io.StringIO(store.state.task + "\n"))
     if explicit_repo:
         argv = ["--repo", str(repo), *argv]
-    if explicit_start:
-        argv = ["start", *argv]
+    argv = ["start", *argv]
     monkeypatch.setattr(sys, "argv", ["codex-uc", *argv])
     monkeypatch.setattr(cli, "Runtime", lambda active_store: runtime)
 
@@ -50,32 +48,18 @@ def test_start_uses_the_current_repository_or_an_explicit_path(
     assert "Design hash:" in capsys.readouterr().out
 
 
-def test_bare_command_prompts_for_a_task_before_starting_design(
-    store, runtime, tmp_path, monkeypatch, capsys
-):
-    repo = Path(store.state.repo)
-    git(repo, "remote", "add", "origin", str(repo))
-    monkeypatch.chdir(repo)
-    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    monkeypatch.setattr(sys, "argv", ["codex-uc"])
-    monkeypatch.setattr(sys, "stdin", io.StringIO("\n  \n" + store.state.task + "\n"))
-    monkeypatch.setattr(cli, "find_kernel_skill", lambda explicit: Path(store.state.kernel_skill))
-    monkeypatch.setattr(cli, "Runtime", lambda active_store: runtime)
+@pytest.mark.parametrize("argv", [[], ["chat"], ["Something feels wrong with listing tables."]])
+def test_default_command_opens_chat_without_starting_design(monkeypatch, argv):
+    launched = []
+    monkeypatch.setattr(sys, "argv", ["codex-uc", *argv])
+    monkeypatch.setattr(cli, "launch_chat", lambda args: launched.append(args) or 0, raising=False)
+    monkeypatch.setattr(cli, "start", lambda args: pytest.fail("A chat is not yet a task."))
 
     assert cli.main() == 0
 
-    roots = list((tmp_path / "state" / "codex-uc").iterdir())
-    assert len(roots) == 1
-    started = Store(roots[0])
-    assert started.state.repo == str(repo)
-    assert started.state.task == store.state.task
-    assert started.state.phase == "design"
-    assert started.state.approved_design is None
-    assert git(repo, "status", "--porcelain") == ""
-    assert not any(call[1] == WorkResult for call in runtime.calls)
-    output = capsys.readouterr().out
-    assert output.count("What would you like to work on?") == 3
-    assert "Design hash:" in output
+    assert len(launched) == 1
+    assert launched[0].command == "chat"
+    assert launched[0].task == (argv[0] if argv and argv[0] != "chat" else None)
 
 
 @pytest.mark.parametrize(
@@ -89,7 +73,7 @@ def test_cancelling_the_task_prompt_creates_no_run(monkeypatch, capsys, error, e
     def cancel(prompt):
         raise error
 
-    monkeypatch.setattr(sys, "argv", ["codex-uc"])
+    monkeypatch.setattr(sys, "argv", ["codex-uc", "start"])
     monkeypatch.setattr("builtins.input", cancel)
     monkeypatch.setattr(cli, "start", lambda args: pytest.fail("No run should be created."))
 
