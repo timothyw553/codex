@@ -9,27 +9,36 @@ All work stays local. The command produces a patch and a PR draft for you to rev
 Install [uv](https://docs.astral.sh/uv/) and Codex. Sign in to Codex as usual.
 Install the `kernel-review` skill separately. Its source is not included in this fork.
 
-From this checkout:
+From this fork's checkout:
 
 ```sh
-uv run --project harnesses/unitycatalog codex-uc start \
-  --repo /path/to/unitycatalog \
-  --kernel-review /path/to/kernel-review/SKILL.md \
-  "Describe the change you want"
+uv run --project harnesses/unitycatalog codex-uc \
+  --repo /path/to/unitycatalog "Describe the change you want"
 ```
 
+If `codex-uc` is on your PATH, run it from your Unity Catalog checkout or any
+directory inside it:
+
+```sh
+cd /path/to/unitycatalog
+codex-uc "Describe the change you want"
+```
+
+The command uses the current Git repository. `start` is optional. Use
+`codex-uc --repo /path/to/unitycatalog "Describe the change"` from another directory.
 The command fetches `origin/main` and creates an isolated worktree. Use `--base REF`
 to start from an existing local ref. Your original checkout can have unfinished work.
-The skill path is optional if the skill is installed in Codex's plugin cache.
+The command finds `kernel-review` in Codex's plugin cache. Use
+`--kernel-review /path/to/kernel-review/SKILL.md` to select it explicitly.
 The command uses your configured model. `--model` selects a different one.
 
 Read the design. Discuss its architecture, behavior, interfaces, dependencies, and edge
 cases before approving it. The command prints a run path and a hash for the exact design.
 
 ```sh
-uv run --project harnesses/unitycatalog codex-uc discuss RUN "Explain the upgrade behavior"
-uv run --project harnesses/unitycatalog codex-uc approve RUN --design DESIGN_HASH
-uv run --project harnesses/unitycatalog codex-uc run RUN
+codex-uc discuss RUN "Explain the upgrade behavior"
+codex-uc approve RUN --design DESIGN_HASH
+codex-uc run RUN
 ```
 
 `show RUN` prints the design. `status RUN` shows the saved phase. Run state defaults to

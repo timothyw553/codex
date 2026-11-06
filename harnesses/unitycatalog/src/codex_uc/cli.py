@@ -62,12 +62,18 @@ def start(args) -> Store:
     return Store(root)
 
 
-def parser() -> argparse.ArgumentParser:
-    cli = argparse.ArgumentParser(description="Build focused Unity Catalog changes with Codex.")
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    cli = argparse.ArgumentParser(
+        description="Build focused Unity Catalog changes with Codex.",
+        epilog='From a Git repository, run: codex-uc "Describe the change". '
+        "Use --repo PATH from another directory.",
+    )
     commands = cli.add_subparsers(dest="command", required=True)
     initial = commands.add_parser("start", help="Investigate a task and propose its design.")
     initial.add_argument("task")
-    initial.add_argument("--repo", type=Path, required=True)
+    initial.add_argument(
+        "--repo", type=Path, default=Path.cwd(), help="Default: the current Git repository."
+    )
     initial.add_argument("--base", help="Use this existing ref instead of fetching origin/main.")
     initial.add_argument("--kernel-review", help="Path to the installed kernel-review SKILL.md.")
     initial.add_argument("--model", help="Use this model instead of the user's configured default.")
@@ -94,11 +100,14 @@ def parser() -> argparse.ArgumentParser:
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("run", type=Path)
-    return cli
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] not in commands.choices and argv[0] not in {"-h", "--help"}:
+        argv = ["start", *argv]
+    return cli.parse_args(argv)
 
 
 def main() -> int:
-    args = parser().parse_args()
+    args = parse_args()
     store = None
     try:
         store = start(args) if args.command == "start" else Store(args.run)
